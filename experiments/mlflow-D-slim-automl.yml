@@ -1,0 +1,46 @@
+# Interaction arm: slim database AND AutoML.
+#
+# VARIES FROM ARM A: db AND h2o_entrypoint -- deliberately two things, which
+# breaks the campaign's own one-variable rule. The justification is that A, B
+# and C give the two main effects, and this arm is the only way to see whether
+# they interact: if the slim database costs more AUC under AutoML than under the
+# stack, the slim build is not a neutral speed-up but something the algorithm
+# choice has to account for. Read it only against the other three, never alone.
+#
+# Every other arm in this campaign differs from THIS file in exactly one line,
+# except arm D, which deliberately differs in two (see its header).
+
+experiment: mlflow-D-slim-automl
+outdir: results/mlflow-D-slim-automl
+
+# The site supplies the bucket and prefix (site.env); an experiment names
+# only WHICH database, so it can be re-run somewhere else.
+db_name: cryptic-slim.duckdb
+
+# --- held fixed across the whole campaign ----------------------------------
+drugs: RIF
+lineages: lineage1,lineage2,lineage3,lineage4
+
+fe_name: mlflow-campaign
+fe_mutation_selector: top_n
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage          # the honest regime: train on three, test on the fourth
+fe_n_folds: 5
+fe_pre_steps: ""
+fe_fold_steps: ""
+candidate_level: mutation
+candidate_pool_size: 120
+
+h2o_feature_set: concordant
+h2o_runtime_secs: 900
+
+# Tracking target comes from MTB_MLFLOW_URI in site.env, not from here: the
+# server is where results are recorded, not part of what is computed.
+mlflow_experiment: mtb-resistotyper-ml/h2o
+
+h2o_entrypoint: train_h2o
+h2o_sort_metric: AUC
+h2o_balance_classes: false

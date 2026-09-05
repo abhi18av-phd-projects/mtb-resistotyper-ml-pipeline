@@ -1,0 +1,33 @@
+# Question:   do PE/PPE features collapse because they track lineage, or because short
+#             reads mis-call them? Only the second predicts that low-callability regions
+#             OUTSIDE PE/PPE are contaminated too, where no gene-name filter reaches.
+# Varies:     fe_universe — callability_filter INSTEAD OF region_filter, so the two are
+#             compared rather than stacked.
+# Prediction: if mis-calling is the mechanism, callability alone recovers most of what
+#             region_filter recovers AND removes further noise; if lineage tracking is,
+#             callability adds little once PE/PPE is gone.
+# Needs:      RLC_Regions.H37Rv.bed from farhat-lab/mtb-illumina-wgs-evaluation, and a
+#             gene map carrying coordinates.
+
+experiment: callability-beyond-pe-ppe
+outdir: results/callability-beyond-pe-ppe
+db: analysis/databases/duckdb/cryptic.duckdb
+
+drugs: RIF,INH,EMB,MXF,LEV,AMI,BDQ
+lineages: lineage1,lineage2,lineage3,lineage4
+
+fe_name: callability
+fe_mutation_selector: top_n
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage
+fe_n_folds: 5
+
+fe_pre_steps: 'callability_filter:regions=/path/to/RLC_Regions.H37Rv.bed'
+fe_fold_steps: ''
+
+candidate_level: mutation
+h2o_feature_set: concordant
+h2o_runtime_secs: 900

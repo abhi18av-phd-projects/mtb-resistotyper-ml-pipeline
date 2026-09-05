@@ -1,0 +1,33 @@
+# Question:   does ranking by association with the phenotype beat ranking by prevalence,
+#             once the ranking is done inside the fold?
+# Varies:     fe_mutation_selector -> all (the mart keeps the wide universe), and the
+#             ranking moves to fe_rank, below the label boundary, where it belongs.
+# Prediction: little to no gain. Concordance selection already narrows ~1000 columns to
+#             ~40, so a better ordering of the 1000 mostly changes which noise is carried
+#             into a step that discards it anyway. A NULL here is worth having: it says
+#             the mart's universe is not the binding constraint.
+# Note:       this cannot be run with fe_mutation_selector chi2 -- build_mart refuses it,
+#             because ranking on the label at mart-build time sees every held-out lineage.
+
+experiment: association-ranking
+outdir: results/association-ranking
+db: analysis/databases/duckdb/cryptic.duckdb
+
+drugs: RIF,INH,EMB,MXF,LEV,ETH,KAN,AMI,BDQ,LZD,CFZ
+lineages: lineage1,lineage2,lineage3,lineage4
+
+fe_name: chi2-in-fold
+fe_mutation_selector: all            # wide, label-free mart
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage
+fe_n_folds: 5
+
+fe_pre_steps: ''
+fe_fold_steps: 'rank_association:method=chi2;top_n=1000'   # <-- below the boundary
+
+candidate_level: mutation
+h2o_feature_set: concordant
+h2o_runtime_secs: 900

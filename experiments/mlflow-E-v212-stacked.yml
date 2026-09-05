@@ -1,0 +1,59 @@
+# Release arm: CRyPTIC v2.1.2, ten months before v3.4.0.
+#
+# VARIES FROM ARM A: db only. Everything downstream is byte-identical.
+#
+# Question:   what does a model edition fitted on the older release reach, and
+#             does the pipeline produce it as a re-run rather than a rebuild?
+# Prediction: within 0.02 AUC of arm A. A larger gap is interesting either way:
+#             the later release both grew the cohort and re-derived the labels,
+#             so a gap confounds them, and no gap at all would suggest the extra
+#             samples added nothing the model could use.
+#
+# THREE CONFOUNDERS, stated because the number is uninterpretable without them.
+#
+# The releases overlap, so this is a re-fit demonstration and not external
+# validation.
+#
+# The label derivation changed between them, so movement in per-drug performance
+# confounds the data with the labels.
+#
+# And lineage MOVED. v3.4.0 assigns it in GENOMES; v2.1.2 has no such column and
+# carries a Mykrobe call in DST_SAMPLES instead. Under lineage-leave-one-out the
+# lineage assignment defines the FOLDS, so the two arms are not evaluated on the
+# same partition. The database records which source it used in
+# release_shape.json, and any comparison has to carry that caveat.
+
+experiment: mlflow-E-v212-stacked
+outdir: results/mlflow-E-v212-stacked
+
+# The site supplies the bucket and prefix (site.env); an experiment names
+# only WHICH database, so it can be re-run somewhere else.
+db_name: cryptic-v2.1.2.duckdb
+
+# --- held fixed across the whole campaign ----------------------------------
+drugs: RIF
+lineages: lineage1,lineage2,lineage3,lineage4
+
+fe_name: mlflow-campaign
+fe_mutation_selector: top_n
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage          # the honest regime: train on three, test on the fourth
+fe_n_folds: 5
+fe_pre_steps: ""
+fe_fold_steps: ""
+candidate_level: mutation
+candidate_pool_size: 120
+
+h2o_feature_set: concordant
+h2o_runtime_secs: 900
+
+# Tracking target comes from MTB_MLFLOW_URI in site.env, not from here: the
+# server is where results are recorded, not part of what is computed.
+mlflow_experiment: mtb-resistotyper-ml/h2o
+
+h2o_entrypoint: train_h2o_stacked
+h2o_sort_metric: AUC
+h2o_balance_classes: false

@@ -1,0 +1,65 @@
+# MLflow tracking for the H2O training runs.
+#
+# Rendered from this template by bring-up.sh, which substitutes the ${...}
+# values from site.env. Committed with placeholders so the repository names no
+# cluster; the rendered copy is gitignored.
+version: "1.0"
+name: mlflow
+project: ${MTB_PROJECT}
+framework: custom
+
+image: ${MTB_REGISTRY}/mlflow-tracking:${MLFLOW_TAG}
+
+port: 5000
+health: /health
+
+# Public, so the training record can be cited and inspected alongside the
+# manuscript rather than described in it. Worth being explicit about what that
+# means: MLflow has no authentication of its own, so everything this server holds
+# -- hyperparameters, per-fold metrics, and any logged model artefact -- becomes
+# readable by anyone with the URL, and writable through the tracking API by
+# anyone who finds it. Log nothing here that is not intended for publication.
+access: team
+expose: [public, shared, private]
+
+resources:
+  cpu: 1000      # MHz — the UI plus sqlite reads are light
+  memory: 4096   # MiB — 2048 was not enough even for one worker plus the
+                 # sqlite restore; the four-worker default OOM'd outright
+
+env:
+  # A PREFIX in the GROUP bucket, not a bucket of its own. ADR-0060: the shared
+  # pipeline cache and the workbench home are both keyed on the group bucket, so
+  # a project-scoped bucket silently opts out of both.
+  MLFLOW_DB_BUCKET: ${MTB_GROUP_BUCKET}
+  MLFLOW_DB_OBJECT: pipelines/mtb-resistotyper-ml/mlflow/mlflow.db
+  MLFLOW_DB_PATH: /data/mlflow.db
+  MLFLOW_ARTIFACT_URI: s3://${MTB_GROUP_BUCKET}/pipelines/mtb-resistotyper-ml/mlflow/artifacts
+  # MLflow 3.x rejects a request whose Host header it does not recognise, as
+  # DNS-rebinding protection, and returns 403 for the UI while /health still
+  # answers 200 -- so the platform reports the app healthy and a browser sees
+  # nothing. The shared plane serves this at a direct host:port on the tailnet
+  # and the private plane at the campus name, so both are named here. Named
+  # rather than "*": the protection is worth keeping on a service that exposes
+  # unpublished metrics and model artefacts.
+  # The Host header carries the port, and the shared plane's port is assigned per
+  # deployment, so each name is wildcarded on port rather than pinned. The hosts
+  # themselves stay named: "*" would switch the protection off, and this service
+  # exposes unpublished metrics and model artefacts.
+  MLFLOW_SERVER_ALLOWED_HOSTS: "${MTB_MLFLOW_HOSTS}"
+
+  # MLflow treats POST/PUT/DELETE/PATCH as state-changing and blocks them
+  # cross-origin. Every UI data call is a POST -- runs/search, logged-models
+  # /search -- so without this the Runs view renders "Request error
+  # INTERNAL_ERROR" while the same endpoints answer 200 to curl, which sends no
+  # Origin header. That asymmetry is what makes it look like a server fault
+  # rather than a CORS policy: the API is fine, the browser is refused.
+  MLFLOW_SERVER_CORS_ALLOWED_ORIGINS: "${MTB_MLFLOW_ORIGINS}"
+
+  # MLFLOW_STATIC_PREFIX intentionally UNSET -> served at root, matching the
+  # direct host:port shared-plane exposure rather than the /apps/<name>/
+  # reverse-proxy path, which carries the SPA asset-404 path-prefix bug.
+
+data:
+  - bucket: ${MTB_GROUP_BUCKET}
+    access: read-write

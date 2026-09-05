@@ -1,0 +1,15 @@
+work/
+.nextflow*
+results/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.duckdb
+*.parquet
+# the gene annotation map is a committed asset, not a build output
+!assets/*.parquet
+
+# Site-specific settings; see site.env.example
+site.env
+# Rendered from abc-app.yaml.template by bring-up.sh
+deploy/mlflow/abc-app.yaml

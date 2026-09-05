@@ -1,0 +1,29 @@
+# Question:   does removing the hypervariable regions change the honest tiers?
+# Varies:     fe_universe — region_filter added
+# Prediction: neutral-to-positive across usable and moderate, and BDQ drops by about
+#             0.05. design/20 measured that on the de-novo arm; a drop here would be
+#             diagnostic rather than a loss, because BDQ's score was partly built on
+#             the lineage shortcuts this filter removes.
+
+experiment: drop-pe-ppe
+outdir: results/drop-pe-ppe
+db: analysis/databases/duckdb/cryptic.duckdb
+
+drugs: RIF,INH,EMB,MXF,LEV,ETH,KAN,AMI,BDQ,LZD,CFZ
+lineages: lineage1,lineage2,lineage3,lineage4
+
+fe_name: drop-pe-ppe
+fe_mutation_selector: top_n
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage
+fe_n_folds: 5
+
+fe_pre_steps: region_filter           # <-- the one change
+fe_fold_steps: ''
+
+candidate_level: mutation
+h2o_feature_set: concordant
+h2o_runtime_secs: 900

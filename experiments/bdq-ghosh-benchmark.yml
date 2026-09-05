@@ -1,0 +1,53 @@
+# Question:   Ghosh 2026 report AUC 0.87 for bedaquiline; we report 0.573. Is the
+#             gap explained by SAMPLING and CV REGIME rather than by features?
+#
+# Their cohort:  632 isolates, 294 resistant (46.5%), five-fold CV
+# Our cohort:  14,534 isolates, 151 resistant ( 1.0%), lineage-leave-one-out
+#
+#             They assembled resistant isolates across 17 BioProjects — case-control
+#             sampling, not a population cohort — and evaluated under the regime our
+#             own results show inflates by up to 0.19. Two differences, both in the
+#             optimistic direction, before any feature is considered.
+#
+# Varies:     the two new steps drawn from the papers, run on BDQ specifically.
+#             rank_mic ranks on the graded MIC rather than the breakpoint-thresholded
+#             label (Pei 2024); select_cross_model keeps what a random forest and an
+#             MLP independently rank top-N (Ghosh 2026's own selection method).
+#
+# Prediction: both are null for BDQ. Neither manufactures resistant examples, and
+#             151 is the binding constraint. The MIC ranker has the better chance,
+#             since it uses more of the phenotype than a binary label does — but a
+#             better ordering of features cannot fix a count.
+#
+# Reads:      tiers/tiers_BDQ_ghosh-methods.json → auc, per_lineage_auc
+#
+# NOT ANSWERED HERE. The true external benchmark needs their 632 isolates run
+# through our pipeline under lineage-LOO, which needs the 17 BioProjects fetched
+# and called first. This experiment isolates the METHOD difference on our data;
+# it does not isolate the COHORT difference. Running their cohort is design/18's
+# external-benchmark item and is a data-acquisition task before it is a pipeline one.
+
+experiment: bdq-ghosh-benchmark
+outdir: results/bdq-ghosh-benchmark
+db: analysis/databases/duckdb/cryptic.duckdb
+
+# The at-chance tier plus two usable-tier controls, so a null on BDQ can be told
+# apart from a step that simply does not work.
+drugs: BDQ,CFZ,RIF,INH
+lineages: lineage1,lineage2,lineage3,lineage4
+
+fe_name: ghosh-methods
+fe_mutation_selector: all            # wide, label-free mart; ranking happens per fold
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage
+fe_n_folds: 5
+
+fe_pre_steps: 'region_filter'
+fe_fold_steps: 'rank_mic:top_n=1000;min_carriers=10'
+
+candidate_level: mutation
+h2o_feature_set: concordant
+h2o_runtime_secs: 900

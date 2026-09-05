@@ -1,0 +1,5 @@
+name,mutation_selector,top_n,fold_strategy
+prevalence-1000,top_n,1000,lineage
+chi2-1000,chi2,1000,lineage
+mi-1000,mi,1000,lineage
+prevalence-2000,top_n,2000,lineage

@@ -1,0 +1,34 @@
+# Question:   how much AUC did the previous global concordance selection borrow from the
+#             held-out lineage?
+# Varies:     nothing in the FE. This is the baseline run; the answer comes from the
+#             tier report, which computes both numbers from the same 44 folds --
+#             the honest one from the lineage each fold never saw, and the optimistic
+#             one counting every lineage in the manifest.
+# Prediction: small, perhaps 0.005 to 0.02, because the concordant sets are dominated by
+#             determinants like rpoB_S450L that any fold would select. Small is the
+#             useful answer: it lets Methods 5.3 state the cost rather than assert there
+#             is none.
+# Reads:      tiers/*.json -> selection_leakage
+
+experiment: selection-leakage
+outdir: results/selection-leakage
+db: analysis/databases/duckdb/cryptic.duckdb
+
+drugs: RIF,INH,EMB,MXF,LEV,ETH,KAN,AMI,BDQ,LZD,CFZ
+lineages: lineage1,lineage2,lineage3,lineage4
+
+fe_name: baseline
+fe_mutation_selector: top_n
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage
+fe_n_folds: 5
+
+fe_pre_steps: ''
+fe_fold_steps: ''
+
+candidate_level: mutation
+h2o_feature_set: concordant
+h2o_runtime_secs: 900

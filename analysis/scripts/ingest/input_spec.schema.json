@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/abhi18av-phd-projects/pub-mtb-resistotyper-ml/ingest/input_spec.schema.json",
+  "title": "MTB resistotyper — ideal serving input (v1.0.0)",
+  "description": "The canonical input we ask users to send for drug-resistance prediction. It is the CRyPTIC/gnomonicus genotype + sample QC covariates, in GARC nomenclature (design/16). It deliberately contains NO catalogue interpretation (no effects/predictions/R-S calls) — replacing that interpretation is exactly what the model does, and including it would leak the answer. Absence of a variant means wild-type/reference at that locus; the model treats any panel mutation not listed here as 0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "sample_id", "nomenclature", "covariates", "variants"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "Version of this input contract."
+    },
+    "sample_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque sample identifier (CRyPTIC UNIQUEID, or any user id)."
+    },
+    "nomenclature": {
+      "type": "string",
+      "enum": ["GARC"],
+      "description": "Mutation-string grammar. GARC (Grammar for Antimicrobial Resistance Catalogues) is the canon — the format piezo/gnomonicus and the CRyPTIC DB use. Other nomenclatures (HGVS, WHO-rav) must be translated to GARC upstream of this file."
+    },
+    "source": {
+      "type": "object",
+      "description": "Optional provenance of the variant calls (which caller/pipeline produced them).",
+      "additionalProperties": true,
+      "properties": {
+        "producer": {"type": "string", "description": "e.g. 'gnomonicus', 'tb-profiler', 'cryptic-slim'"},
+        "producer_version": {"type": "string"},
+        "reference": {"type": "string", "description": "e.g. 'NC_000962.3'"}
+      }
+    },
+    "covariates": {
+      "type": "object",
+      "description": "Sample-level QC + lineage. All three required fields are model inputs (cov__lineage_*, cov__median_coverage, cov__tb_breadth); in the CRyPTIC DB these are 100% populated, so requiring them is safe.",
+      "additionalProperties": false,
+      "required": ["lineage", "median_coverage", "breadth"],
+      "properties": {
+        "lineage": {
+          "type": "string",
+          "description": "Primary lineage, e.g. 'lineage2'. One-hot encoded to cov__lineage_L1..L4; a value outside 1-4 is allowed and maps to all-zero lineage one-hots.",
+          "examples": ["lineage1", "lineage2", "lineage3", "lineage4"]
+        },
+        "median_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Median genome depth (CRyPTIC TB_DEPTH) -> cov__median_coverage."
+        },
+        "breadth": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Percent of reference covered (CRyPTIC TB_COVERAGE) -> cov__tb_breadth."
+        },
+        "sublineage": {
+          "type": ["string", "null"],
+          "description": "Optional finer lineage, e.g. 'lineage2.2.3'. Not a current model input; carried for provenance/future use."
+        },
+        "species": {
+          "type": ["string", "null"],
+          "description": "Optional, e.g. 'M. tuberculosis'."
+        }
+      }
+    },
+    "variants": {
+      "type": "array",
+      "description": "All called variants across the CRyPTIC gene panel (not just resistance genes — phylogenetic/synonymous calls are expected and used by the de-novo model's summary features). Anything not listed is treated as reference. Duplicate (gene, mutation) pairs should be collapsed upstream.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gene", "mutation"],
+        "properties": {
+          "gene": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CRyPTIC/tbdb gene symbol, e.g. 'rpoB', 'katG', or a locus tag 'Rv0008c'."
+          },
+          "mutation": {
+            "type": "string",
+            "minLength": 1,
+            "description": "GARC mutation string: amino-acid (S450L), stop (R305!, !489Y), nucleotide (a-15c, g-78c), indel (110_del_a, 1349_ins_1_c), synonymous (F320F). Joined with gene as raw__<gene>_<mutation> for the model."
+          },
+          "frs": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Fraction read support of the alt allele (CRyPTIC FRS). Frequently null even in the source DB; the de-novo model's mean_frs summary is computed over non-null values only."
+          },
+          "coverage": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "Read depth at this variant (CRyPTIC COVERAGE)."
+          },
+          "is_minor": {
+            "type": "boolean",
+            "default": false,
+            "description": "True if a minor/hetero-resistance allele call (CRyPTIC IS_MINOR). Feeds the n_minor summary. hAMRonization has no equivalent field."
+          }
+        }
+      }
+    }
+  }
+}

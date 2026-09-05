@@ -1,0 +1,30 @@
+# Baseline. Every other experiment copies this and changes ONE thing.
+#
+# Question:   what are the honest per-drug tiers, with selection run inside each fold?
+# Prediction: tiers land where design/15 Part D put them, but a little lower, because
+#             the previous numbers were produced with selection fitted on all lineages.
+
+experiment: baseline
+outdir: results/baseline
+
+db: analysis/databases/duckdb/cryptic.duckdb
+
+drugs: RIF,INH,EMB,MXF,LEV,ETH,KAN,AMI,BDQ,LZD,CFZ
+lineages: lineage1,lineage2,lineage3,lineage4
+
+# --- feature engineering ---------------------------------------------------
+fe_name: baseline
+fe_mutation_selector: top_n          # label-free ranking only
+fe_top_n: 1000
+fe_max_carrier_frac: 0.95
+fe_min_carrier_count: 10
+fe_gene_level_flags: true
+fe_fold_strategy: lineage            # grouped folds, so H2O sees the honest regime
+fe_n_folds: 5
+
+fe_pre_steps: ''                      # L0 steps, none by default
+fe_fold_steps: ''                          # L4, none — top_n already ranked at mart build
+
+candidate_level: mutation
+h2o_feature_set: concordant
+h2o_runtime_secs: 900
