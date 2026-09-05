@@ -106,6 +106,39 @@ MAX_CARRIER_FRAC = 0.95
 MIN_CARRIER_COUNT = 10
 
 
+
+def _read_db_metadata(con) -> dict:
+    """Everything the database records about its own build.
+
+    Empty when the table is absent, which is itself worth recording: a mart built
+    from a database that carries no provenance should say so rather than inherit
+    a plausible-looking default.
+    """
+    try:
+        rows = con.execute("SELECT key, value FROM _database_metadata").fetchall()
+    except Exception:
+        return {}
+    return {k: v for k, v in rows}
+
+
+def _read_release(con) -> str:
+    """The CRyPTIC release this database was built from.
+
+    Refuses to guess. A wrong release label silently mis-attributes every number
+    downstream, and the failure is invisible because the mart still builds.
+    """
+    meta = _read_db_metadata(con)
+    v = (meta.get("source_version") or "").strip()
+    if not v or v in {"src", "source", "."}:
+        raise SystemExit(
+            "the database records no usable source_version "
+            f"(got {v!r}). Rebuild with MTB_CRYPTIC_VERSION set, or backfill "
+            "_database_metadata, before building a mart: a mart that cannot name "
+            "its release cannot be compared with one from another release."
+        )
+    return v
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -491,7 +524,14 @@ def build_mart(
     """)
 
     # ---- write parquet -----------------------------------------------------
-    cryptic_version = "slim-2026.05"
+    # Read the release from the database rather than asserting it. This was
+    # hardcoded to "slim-2026.05", so a mart built from the FULL v3.4.0 release
+    # labelled itself as the slim one. Every mart in a database-comparison
+    # campaign then carried the same stamp, which would have made the arms
+    # indistinguishable in their own metadata: a provenance record that is
+    # constant across the thing it is supposed to distinguish is worse than none,
+    # because it looks like provenance.
+    cryptic_version = _read_release(con)
     mart_filename = f"feature_mart_{drug}_cryptic-{cryptic_version}_{mart_version}.parquet"
     mart_path = out_dir / mart_filename
     con.execute(
@@ -524,6 +564,7 @@ def build_mart(
         "mart_version": mart_version,
         "drug": drug,
         "cryptic_version": cryptic_version,
+        "cryptic_provenance": _read_db_metadata(con),
         "n_samples": len(y_bin),
         "n_R": n_R,
         "n_S": n_S,
