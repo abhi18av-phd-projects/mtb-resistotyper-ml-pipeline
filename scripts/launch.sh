@@ -65,7 +65,14 @@ exec abc pipeline run "$REPO" \
   --params-file "$ARM" \
   --profile nomad,containers \
   --revision "$REV" \
+  `# nextflow.config resolves these with System.getenv INSIDE THE HEAD JOB, so
+   # sourcing site.env here is not enough: without forwarding them the config
+   # falls back to its placeholder defaults and the run reads
+   # s3://su-example-group/, which does not exist. That is the intended failure
+   # mode for an unset variable, but it has to be forwarded to be set.` \
   --env GITHUB_TOKEN --env NF_MINIO_ENDPOINT \
+  --env MTB_GROUP_BUCKET --env MTB_NOMAD_NAMESPACE --env MTB_REGISTRY \
+  --env MTB_MLFLOW_URI \
   --head-pool "${MTB_HEAD_POOL:-platform}" --worker-pool "${MTB_WORKER_POOL:-platform}" \
   --plugin "$NF_NOMAD_PLUGIN" --plugin "${NF_S5CMD_PLUGIN:=nf-nomad-s5cmd@0.1.8}" \
   --work-dir "$WORK_DIR" \
