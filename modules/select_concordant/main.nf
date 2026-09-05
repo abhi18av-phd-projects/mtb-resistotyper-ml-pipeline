@@ -44,7 +44,13 @@ process SELECT_CONCORDANT {
         ${arm}
 
     cd \$OLDPWD
-    mv causal_concordance_*.parquet concordance.parquet
+    # Name the primary output rather than globbing for it. Passing --db turned on
+    # the catalogue benchmark, which writes a SECOND causal_concordance_*.parquet
+    # (…_vs_catalogue). The glob then matched two files and mv read the last
+    # argument as a destination directory: "target 'concordance.parquet': No such
+    # file or directory". The benchmark stays in the work directory; it is a
+    # comparison against the WHO catalogue, not the selection this process emits.
+    mv causal_concordance_${drug}_${params.candidate_level}_level.parquet concordance.parquet
     mv *manifest*.json selection.json 2>/dev/null || echo '{}' > selection.json
     """
 }
