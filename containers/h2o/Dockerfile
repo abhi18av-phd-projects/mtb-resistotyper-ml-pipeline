@@ -37,7 +37,8 @@ RUN pip install --no-cache-dir --upgrade pip \
         pyarrow==18.1.0 \
         duckdb==1.3.0 \
         scikit-learn==1.7.1 \
-        h2o==3.46.0.7
+        h2o==3.46.0.7 \
+        interpret==0.6.9
 
 # setuptools < 81 on purpose. Something in the causal stack still imports
 # pkg_resources, which setuptools REMOVED in v81; a fresh environment therefore
@@ -55,7 +56,7 @@ RUN pip install --no-cache-dir "setuptools<81"
 RUN pip install --no-cache-dir "mlflow==3.14.0" "anyio==4.9.0"
 
 # H2O is useless without a working JVM handshake; prove it at build time.
-RUN java -version && python -c "import h2o, numpy; print('h2o', h2o.__version__, 'numpy', numpy.__version__)"
+RUN java -version && python -c "import h2o, numpy; from interpret.glassbox import ExplainableBoostingRegressor; print('h2o', h2o.__version__, 'numpy', numpy.__version__, 'interpret ok')"
 
 WORKDIR /opt/mtb
 COPY analysis/ /opt/mtb/analysis/

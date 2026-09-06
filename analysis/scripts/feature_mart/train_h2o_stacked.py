@@ -297,7 +297,21 @@ def _train_ensembles(hf, features, y, base, out_dir) -> list[dict]:
 # surrogate EBM on the winning model (glass-box global readout)
 # --------------------------------------------------------------------------- #
 def _fit_surrogate(df, features, model, hf, out_dir) -> dict:
-    from interpret.glassbox import ExplainableBoostingRegressor
+    """Glass-box global readout of the winning model.
+
+    The surrogate explains the model; it is not the model. Losing it should cost
+    the explanation, not the fit. An unguarded import here destroyed ten
+    completed trainings that had already been logged to the tracking server,
+    because the image was built without interpret. The manifest records the
+    absence so a reader can tell "no surrogate was fitted" from "the surrogate
+    found nothing".
+    """
+    try:
+        from interpret.glassbox import ExplainableBoostingRegressor
+    except ImportError as exc:
+        print(f"[surrogate] SKIPPED: {exc}. The models are unaffected; the "
+              f"glass-box readout is absent from this run.", file=sys.stderr)
+        return {"fitted": False, "reason": f"interpret unavailable: {exc}"}
 
     pred = model.predict(hf).as_data_frame()
     p1 = pred["p1"].to_numpy() if "p1" in pred.columns else pred.iloc[:, -1].to_numpy()
