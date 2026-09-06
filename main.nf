@@ -26,6 +26,7 @@ include { SELECT_CONCORDANT as SELECT_FULL } from './modules/select_concordant'
 include { TRAIN_H2O         } from './modules/train_h2o'
 include { EVALUATE_CV       } from './modules/evaluate_cv'
 include { TIER_REPORT       } from './modules/tier_report'
+include { CREATE_DUCKDB     } from './modules/create_duckdb'
 
 
 /*
@@ -185,6 +186,24 @@ workflow {
     ch_sel_fold = SELECT_CONCORDANT(ch_fold_fe, ch_checked.first())
     ch_sel_full = SELECT_FULL(ch_ready.map { d, fe, n, mart, meta ->
         tuple(d, fe, n, mart, meta, 'none') }, ch_checked.first())
+
+    /* ---- D2. the publishable artefact (optional) -------------------------
+     * The state of the data after feature engineering and before training, as
+     * one self-contained DuckDB. Nothing downstream reads it: TRAIN_H2O still
+     * takes the mart and the selection directly, so enabling this changes what
+     * is deposited, never what is computed.
+     *
+     * Gated on params.create_duckdb, so the default run does not pay for it.
+     */
+    if (params.create_duckdb) {
+        CREATE_DUCKDB(
+            ch_ready.map { d, fe, n, mart, meta -> mart }.collect(),
+            ch_ready.map { d, fe, n, mart, meta -> meta }.collect(),
+            ch_sel_fold.map { d, fe, held_out, mart, meta, conc, sel -> conc }
+                       .mix(ch_sel_full.map { d, fe, held_out, mart, meta, conc, sel -> conc })
+                       .collect()
+        )
+    }
 
     /* ---- E. honest evaluation ------------------------------------------- */
     ch_eval = EVALUATE_CV(ch_sel_fold)
