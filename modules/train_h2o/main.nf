@@ -35,7 +35,10 @@ process TRAIN_H2O {
     export MLFLOW_EXPERIMENT='${params.mlflow_experiment}'
     # Provenance the metric cannot be reproduced without, carried as tags so a
     # number in the UI can be traced back to the run and image that made it.
-    export MTB_CONTAINER_TAG='${params.container_tag}'
+    # h2o_container_tag, not container_tag: this task runs mtb-h2o, and
+    # params.container_tag is the mtb-causal image. Stamping the wrong tag
+    # made every logged run name an image it had not run in.
+    export MTB_CONTAINER_TAG='${params.h2o_container_tag}'
     export MTB_GIT_REVISION='${workflow.commitId ?: workflow.scriptId}'
     export NXF_UUID='${workflow.sessionId}'
 

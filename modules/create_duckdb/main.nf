@@ -13,7 +13,8 @@ process CREATE_DUCKDB {
     input:
     path marts
     path metas
-    path selections
+    path selections, stageAs: 'conc*/*'
+    path manifests,  stageAs: 'man*/*'
 
     output:
     path "${params.create_duckdb}", emit: db
@@ -23,12 +24,14 @@ process CREATE_DUCKDB {
 
     script:
     def sel = selections instanceof List ? selections.join(' ') : "${selections}"
+    def man = manifests instanceof List ? manifests.join(' ') : "${manifests}"
     def mart = marts instanceof List ? marts.join(' ') : "${marts}"
     """
     cd ${params.project_root} && \\
     ${params.python} -m analysis.scripts.feature_mart.create_duckdb \\
         --marts ${mart.split(' ').collect { "\$OLDPWD/${it}" }.join(' ')} \\
         --selections ${sel ? sel.split(' ').collect { "\$OLDPWD/${it}" }.join(' ') : ''} \\
+        --manifests ${man ? man.split(' ').collect { "\$OLDPWD/${it}" }.join(' ') : ''} \\
         --arm ${params.experiment} \\
         --out \$OLDPWD/${params.create_duckdb}
     """

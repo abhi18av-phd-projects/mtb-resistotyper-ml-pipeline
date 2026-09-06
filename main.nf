@@ -253,8 +253,14 @@ workflow {
         CREATE_DUCKDB(
             ch_ready.map { d, fe, n, mart, meta -> mart }.collect(),
             ch_ready.map { d, fe, n, mart, meta -> meta }.collect(),
-            ch_sel_fold.map { d, fe, held_out, mart, meta, conc, sel -> conc }
-                       .mix(ch_sel_full.map { d, fe, held_out, mart, meta, conc, sel -> conc })
+            ch_sel_fold.map { _d, _fe, _ho, _mart, _meta, conc, _sel -> conc }
+                       .mix(ch_sel_full.map { _d, _fe, _ho, _mart, _meta, conc, _sel -> conc })
+                       .collect(),
+            // The manifests say HOW each selection was made. Without them the
+            // deposit shows which features were chosen but not on what basis,
+            // which is the part a reader cannot reconstruct.
+            ch_sel_fold.map { _d, _fe, _ho, _mart, _meta, _conc, sel -> sel }
+                       .mix(ch_sel_full.map { _d, _fe, _ho, _mart, _meta, _conc, sel -> sel })
                        .collect()
         )
     }
