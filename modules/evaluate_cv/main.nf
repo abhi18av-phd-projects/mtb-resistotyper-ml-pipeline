@@ -20,6 +20,17 @@ process EVALUATE_CV {
 
     script:
     """
+    # Without these the tracking in evaluate_cv.py degrades to a silent no-op:
+    # it keys off MLFLOW_TRACKING_URI, so an unset variable means the honest
+    # evaluation is computed, written to the manifest, and never reaches the
+    # dashboard. Tracking stays non-fatal; the manifest remains the truth.
+    export MLFLOW_TRACKING_URI='${params.mlflow_uri ?: ""}'
+    export MLFLOW_EXPERIMENT='${params.mlflow_experiment}'
+    # container_tag is correct here: this task runs mtb-causal.
+    export MTB_CONTAINER_TAG='${params.container_tag}'
+    export MTB_GIT_REVISION='${workflow.commitId ?: workflow.scriptId}'
+    export NXF_UUID='${workflow.sessionId}'
+
     cd ${params.project_root} && \\
     ${params.python_causal} -m analysis.scripts.feature_mart.evaluate_cv \\
         --mart \$OLDPWD/${mart} \\
