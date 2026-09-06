@@ -65,9 +65,14 @@ RUN pip install --no-cache-dir "setuptools<81"
 # Import shap too, and assert the numpy major version. The previous check passed
 # on an image that could not run a selection: it imported everything except the
 # library that actually broke, and asserted no version at all.
-RUN python -c "import numpy, scipy, sklearn, lightgbm, econml, dowhy, interpret, shap; \
+# EVALUATE_CV runs in this image and logs the honest-evaluation metrics. Without
+# mlflow here the tracking degrades to a no-op and the lineage-held-out results
+# -- the numbers the campaign exists to produce -- never reach the dashboard.
+RUN pip install --no-cache-dir "mlflow-skinny==3.14.0"
+
+RUN python -c "import numpy, scipy, sklearn, lightgbm, econml, dowhy, interpret, shap, mlflow; \
 assert numpy.__version__.startswith('1.'), f'numpy pin lost: {numpy.__version__}'; \
-print('voters import OK:', numpy.__version__, sklearn.__version__, 'shap', shap.__version__)"
+print('voters import OK:', numpy.__version__, sklearn.__version__, 'shap', shap.__version__, 'mlflow', mlflow.__version__)"
 
 WORKDIR /opt/mtb
 COPY analysis/ /opt/mtb/analysis/

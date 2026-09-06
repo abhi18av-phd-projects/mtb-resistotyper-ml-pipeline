@@ -154,13 +154,40 @@ def log_manifest(handle, manifest: dict, out_dir: Path) -> None:
     disagree about what a run achieved: MLflow is fed the same object that is
     written to disk, not a parallel summary assembled beside it.
     """
-    handle.metrics({
-        "best_cv_auc": manifest["best_model"]["cv_auc"],
-        "best_base_auc": manifest["best_base_auc"],
-        "stacking_lift": manifest["stacking_lift_over_best_base"],
+    bases = manifest.get("layer2_base_models", [])
+    ensembles = manifest.get("layer3_ensembles", [])
+    lift = manifest["stacking_lift_over_best_base"]
+
+    summary = {
+        "headline/best_cv_auc": manifest["best_model"]["cv_auc"],
+        "headline/best_base_auc": manifest["best_base_auc"],
+        "headline/stacking_lift": lift,
+        # The same number times 100. `stacking_lift` renders as "-0.00" in the
+        # UI, which is the one presentation that hides whether stacking helped
+        # at all -- the quantity is a difference of AUCs and lives in the third
+        # decimal by construction.
+        "headline/stacking_lift_pct": (lift * 100.0) if isinstance(lift, (int, float)) else None,
         "n_features": manifest["n_features"],
         "wall_time_seconds": manifest["wall_time_seconds"],
-    })
+    }
+    best_ens = max((e["cv_auc"] for e in ensembles
+                    if isinstance(e.get("cv_auc"), (int, float))), default=None)
+    if best_ens is not None:
+        summary["headline/best_ensemble_auc"] = best_ens
+
+    # The leaderboard, lifted onto the PARENT. It already exists as nested child
+    # runs, but a comparison that needs nine drill-downs is not a comparison:
+    # under one `leaderboard/` prefix these become a single sorted bar chart, so
+    # "did stacking beat the best base model" is answerable at a glance. That
+    # question has a non-obvious answer here -- on RIF it did not.
+    for b in bases:
+        if isinstance(b.get("cv_auc"), (int, float)):
+            summary[f"leaderboard/base_{b['family']}_auc"] = b["cv_auc"]
+    for e in ensembles:
+        if isinstance(e.get("cv_auc"), (int, float)):
+            summary[f"leaderboard/ens_{e['name']}_auc"] = e["cv_auc"]
+
+    handle.metrics({k: v for k, v in summary.items() if v is not None})
     handle.params({
         "best_model": manifest["best_model"]["which"],
         "best_is_ensemble": manifest["best_model"]["is_ensemble"],
@@ -168,12 +195,12 @@ def log_manifest(handle, manifest: dict, out_dir: Path) -> None:
         "sort_metric": manifest["sort_metric"],
         "balance_classes": manifest["balance_classes"],
     })
-    for b in manifest.get("layer2_base_models", []):
+    for b in bases:
         handle.child(f"base:{b['family']}",
                      {"family": b["family"], "model_id": b["model_id"]},
                      {"cv_auc": b["cv_auc"], "cv_aucpr": b["cv_aucpr"],
                       "cv_logloss": b["cv_logloss"], "train_secs": b["train_secs"]})
-    for e in manifest.get("layer3_ensembles", []):
+    for e in ensembles:
         handle.child(f"ensemble:{e['name']}",
                      {"metalearner": e["metalearner"],
                       "n_base_models": e["n_base_models"],

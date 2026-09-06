@@ -130,6 +130,92 @@ def _leave_one_group_out(X, y, groups, group_values, lineage) -> dict:
     return pooled
 
 
+def _tracked_metrics(manifest: dict) -> dict[str, float]:
+    """Flatten a manifest into MLflow metric keys.
+
+    Keys are namespaced with `/` because MLflow groups charts on the prefix, so
+    `lineage_loo/*` becomes one section instead of five unrelated single-bar
+    charts. Per-lineage AUCs are lifted onto the PARENT rather than left in the
+    manifest blob: four bars in one chart is the comparison this evaluation
+    exists to make, and it is unreadable if each lineage needs a drill-down.
+    """
+    out: dict[str, float] = {}
+    res = manifest.get("results", {})
+
+    for fs, byregime in res.items():
+        if isinstance(byregime.get("n_features"), int):
+            out[f"n_features/{fs}"] = float(byregime["n_features"])
+        for regime in ("random", "lineage_loo", "country_loo"):
+            r = byregime.get(regime) or {}
+            for key, name in (("overall_auc", "overall"), ("mean_group_auc", "mean_group")):
+                if isinstance(r.get(key), (int, float)):
+                    out[f"{regime}/{fs}_{name}_auc"] = float(r[key])
+            for group, g in (r.get("per_group") or {}).items():
+                if isinstance(g.get("auc"), (int, float)):
+                    out[f"{regime}/{fs}/{group}_auc"] = float(g["auc"])
+                    out[f"support/{regime}_{fs}_{group}_n"] = float(g.get("n") or 0)
+
+    # The two numbers this script exists to produce, computed once here rather
+    # than eyeballed off two charts.
+    #
+    # leakage_delta: how much AUC a random k-fold buys you that an unseen
+    # lineage does not. It is the optimism a random split hides, and a headline
+    # AUC without it is not interpretable.
+    #
+    # concordance_gain: whether the causally-concordant feature set survives the
+    # honest regime BETTER than the de-novo set. That is the decisive test for
+    # the concordance value proposition, and it is a difference of differences,
+    # so no single chart shows it.
+    for fs in res:
+        rand = (res[fs].get("random") or {}).get("overall_auc")
+        loo = (res[fs].get("lineage_loo") or {}).get("mean_group_auc")
+        if isinstance(rand, (int, float)) and isinstance(loo, (int, float)):
+            out[f"headline/leakage_delta_{fs}"] = float(rand) - float(loo)
+
+    dn = (res.get("denovo", {}).get("lineage_loo") or {}).get("mean_group_auc")
+    co = (res.get("concordant", {}).get("lineage_loo") or {}).get("mean_group_auc")
+    if isinstance(dn, (int, float)) and isinstance(co, (int, float)):
+        out["headline/concordance_gain_lineage_loo"] = float(co) - float(dn)
+
+    if isinstance(manifest.get("wall_time_seconds"), (int, float)):
+        out["wall_time_seconds"] = float(manifest["wall_time_seconds"])
+    return out
+
+
+def _track(manifest: dict, out_dir: Path, held_out: str | None) -> None:
+    """Project the manifest onto MLflow. Never fatal: the manifest is the truth.
+
+    Without this the honest evaluation was invisible in MLflow -- the dashboard
+    showed H2O's internal CV and nothing about generalisation to an unseen
+    lineage, which is the claim the campaign is built to support.
+    """
+    try:
+        from analysis.scripts.feature_mart import mlflow_tracking
+    except Exception:
+        return
+    fs_label = "concordant" if "concordant" in manifest.get("results", {}) else "denovo"
+    name = f"{manifest['drug']}-cv-{held_out}" if held_out else f"{manifest['drug']}-cv"
+    with mlflow_tracking.run(name, fs_label, {
+            "model": manifest.get("model"),
+            "random_state": manifest.get("random_state"),
+            "held_out_lineage": held_out or "none",
+            "stage": "evaluate_cv"}) as h:
+        h.metrics(_tracked_metrics(manifest))
+        # Per (feature set, regime) as children, so the per-lineage support
+        # counts stay browsable without crowding the parent.
+        for fs, byregime in manifest.get("results", {}).items():
+            for regime in ("random", "lineage_loo", "country_loo"):
+                r = byregime.get(regime) or {}
+                if not r:
+                    continue
+                h.child(f"{fs}:{regime}",
+                        {"feature_set": fs, "regime": regime,
+                         "n_features": byregime.get("n_features")},
+                        {"overall_auc": r.get("overall_auc"),
+                         "mean_group_auc": r.get("mean_group_auc")})
+        h.artifact(out_dir)
+
+
 def _infer_drug(mart_path: Path) -> str:
     """feature_mart_<DRUG>_cryptic-... -> <DRUG>."""
     name = mart_path.name
@@ -138,7 +224,8 @@ def _infer_drug(mart_path: Path) -> str:
     return "UNKNOWN"
 
 
-def evaluate(mart_path: Path, concordance_path: Path | None, out_dir: Path, drug: str | None = None) -> dict:
+def evaluate(mart_path: Path, concordance_path: Path | None, out_dir: Path,
+             drug: str | None = None, held_out: str | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     drug = drug or _infer_drug(mart_path)
@@ -175,6 +262,7 @@ def evaluate(mart_path: Path, concordance_path: Path | None, out_dir: Path, drug
         "wall_time_seconds": round(time.time() - t0, 2),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    _track(manifest, out_dir, held_out)
     return manifest
 
 
@@ -184,9 +272,12 @@ def main() -> None:
     p.add_argument("--concordance", type=Path, default=None)
     p.add_argument("--out", type=Path, default=Path("analysis/results/cv_eval"))
     p.add_argument("--drug", default=None, help="Drug label (inferred from the mart filename if omitted).")
+    p.add_argument("--held-out", default=None,
+                   help="Held-out lineage this fold's feature selection was made without.")
     args = p.parse_args()
 
-    m = evaluate(args.mart, args.concordance, args.out, drug=args.drug)
+    m = evaluate(args.mart, args.concordance, args.out, drug=args.drug,
+                 held_out=args.held_out)
 
     print("\n=== overall AUC by feature set × regime ===")
     print(f"{'feature_set':<12}{'n_feat':>7}{'random':>9}{'lineage_loo':>13}{'country_loo':>13}")

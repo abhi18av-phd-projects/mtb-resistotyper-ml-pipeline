@@ -25,6 +25,7 @@ process EVALUATE_CV {
         --mart \$OLDPWD/${mart} \\
         --concordance \$OLDPWD/${concordance} \\
         --drug ${drug} \\
+        --held-out ${held_out} \\
         --out \$OLDPWD/cv/
 
     cd \$OLDPWD && cp cv/manifest.json fold_${held_out}.json
