@@ -118,6 +118,45 @@ needs no shared filesystem and no checkout to find its scripts.
 workflow is versioned by its git tag, the analysis code by the image tag, and the two are
 joined in `nextflow.config`.
 
+## The publishable artefact
+
+Two optional flags turn the pipeline into something a reader can pick up without the cluster.
+
+**Depositing.** `--create_duckdb` writes one self-contained DuckDB holding the state of the
+data after feature engineering and before training: every mart, every concordance selection,
+the per-fold selection manifests, and a `marts_index` in which `cryptic_version`, `mart_version`
+and `catalogue` are first-class columns, so a reader can tell a CRyPTIC 2.1.2 mart from a 3.4.0
+one without opening a manifest. Nothing downstream reads it — `TRAIN_H2O` still takes the mart
+and the selection directly — so enabling the flag changes what is deposited, never what is
+computed.
+
+```bash
+nextflow run . -profile nomad --create_duckdb
+```
+
+**Continuing from a deposit.** `--from_duckdb <file>` skips the compendium, the thirteen-stage
+build, feature engineering and causal selection, unpacks their results back into the parquet and
+JSON layout the training stages already expect, and starts at training. This is how somebody
+resumes from the Zenodo deposit without the cluster or the twelve hours that produced it.
+
+```bash
+nextflow run . -profile standard --from_duckdb mtb-resistotyper-fe.duckdb
+```
+
+Two details worth knowing:
+
+- The deposit holds **both campaign arms**, and they are not interchangeable. Units with a
+  held-out lineage carry a selection made inside that training fold and feed evaluation only;
+  the `none` unit carries a selection refit on all data and feeds the shipped model only. The
+  branch separates them, because crossing them would produce deployment models fitted on
+  fold-restricted features and a "held-out" score computed on rows whose features already saw
+  them.
+- A deposit rerun does **not** redo feature engineering, so this run's `fe_*` settings do not
+  describe the mart — only `--fe_name` is used, as a grouping label for the tier report.
+
+There is no `-entry` for this. Nextflow's strict parser refuses the option outright and says to
+drive a named workflow from a parameter instead, so both paths live in the one entry workflow.
+
 ## Licence
 
 EPL-2.0.

@@ -27,6 +27,7 @@ include { TRAIN_H2O         } from './modules/train_h2o'
 include { EVALUATE_CV       } from './modules/evaluate_cv'
 include { TIER_REPORT       } from './modules/tier_report'
 include { CREATE_DUCKDB     } from './modules/create_duckdb'
+include { UNPACK_DUCKDB     } from './modules/unpack_duckdb'
 
 
 /*
@@ -99,6 +100,59 @@ workflow {
       pre-mart FE    : ${params.fe_pre_steps  ?: '(none)'}
       per-fold FE    : ${params.fe_fold_steps ?: '(none)'}
       """.stripIndent()
+
+    /* ---- A0. start from a published artefact instead -----------------------
+     * `--from_duckdb <file>` skips the compendium, the thirteen-stage build,
+     * feature engineering and causal selection: their results are unpacked from
+     * the deposit and fed straight to training. This is how somebody continues
+     * the work from the published artefact, without the cluster or the twelve
+     * hours that produced it.
+     *
+     * A branch here rather than a named workflow: Nextflow's strict parser
+     * refuses `-entry`, and says so — "use a param to run a named workflow from
+     * the entry workflow".
+     */
+    if( params.from_duckdb ) {
+        ch_unpacked = UNPACK_DUCKDB(
+            channel.fromPath(params.from_duckdb, checkIfExists: true)).index
+
+        // Only `.name` is ever read downstream, and it is a grouping label. A
+        // deposit rerun does NOT redo feature engineering, so advertising this
+        // run's fe_* knobs as though they had produced the mart would be a
+        // fabrication -- the mart came from the deposit. Carry the label alone.
+        def feLabel = [name: params.fe_name]
+
+        ch_units = ch_unpacked.splitJson()
+            .map { u -> tuple(u.drug, feLabel, u.held_out,
+                              file(u.mart), file(u.meta),
+                              file(u.concordance), file(u.selection)) }
+
+        // The deposit holds BOTH arms, and they are not interchangeable. Units
+        // with a held-out lineage carry a selection made inside that training
+        // fold and are the only honest input to evaluation; the `none` unit
+        // carries a selection refit on all data and is the only legitimate
+        // input to a shipped model. Feeding either arm to the other stage --
+        // which the first version of this branch did -- silently produces
+        // deployment models fitted on fold-restricted features and a "fold"
+        // score computed on rows its features already saw.
+        ch_by_arm  = ch_units.branch { _d, _fe, held_out, _m, _mt, _c, _s ->
+            deployment: held_out == 'none'
+            evaluation: true
+        }
+
+        ch_models = TRAIN_H2O(ch_by_arm.deployment)
+        ch_eval   = EVALUATE_CV(ch_by_arm.evaluation)
+        ch_tiers  = TIER_REPORT(
+            ch_eval.map { drug, fe, _held_out, manifest -> tuple(drug, fe.name, manifest) }
+                   .groupTuple(by: [0, 1]))
+
+        // The stages this path skipped publish nothing; they were not run.
+        ch_checked  = channel.empty()
+        ch_cohort   = channel.empty()
+        ch_marts    = channel.empty()
+        ch_sel_fold = channel.empty()
+    }
+    else {
 
     /* ---- A. the slim database -------------------------------------------
      * Thirteen stages that all mutate ONE 3.5 GB DuckDB file in place, so they
@@ -225,6 +279,8 @@ workflow {
      */
     ch_models = TRAIN_H2O(ch_sel_full)
 
+    }
+
     publish:
     database = ch_checked
     cohort   = ch_cohort
@@ -234,6 +290,7 @@ workflow {
     tiers    = ch_tiers
     models   = ch_models
 }
+
 
 output {
     database { path 'database' }
