@@ -298,12 +298,24 @@ workflow {
 }
 
 
+/* These channels emit TUPLES, so a path closure receives a List. `r.drug` on a
+ * List is a Groovy spread -- it asks every element for a `.drug`, hits the drug
+ * String first and throws MissingPropertyException. It cost a full campaign:
+ * every task ran to completion and the run then died publishing its results.
+ * (`r.fe_hash` never existed either; the FE map carries `name`.)
+ *
+ * Index positionally against each process's declared output tuple:
+ *   marts   BUILD_MART        (drug, fe, fe.name, mart, meta)
+ *   folds   SELECT_*          (drug, fe, held_out, mart, meta, conc, sel)
+ *   evals   EVALUATE_CV       (drug, fe, held_out, manifest)
+ *   models  TRAIN_H2O         (drug, fe, h2o/**, manifest)
+ */
 output {
     database { path 'database' }
     cohort   { path 'cohort' }
-    marts    { path { r -> "marts/${r.drug}/${r.fe_hash}" } }
-    folds    { path { r -> "selection/${r.drug}/held-out-${r.held_out}" } }
-    evals    { path { r -> "evaluation/${r.drug}" } }
+    marts    { path { r -> "marts/${r[0]}/${r[2]}" } }
+    folds    { path { r -> "selection/${r[0]}/held-out-${r[2]}" } }
+    evals    { path { r -> "evaluation/${r[0]}" } }
     tiers    { path 'tiers' }
-    models   { path { r -> "models/${r.drug}" } }
+    models   { path { r -> "models/${r[0]}" } }
 }
