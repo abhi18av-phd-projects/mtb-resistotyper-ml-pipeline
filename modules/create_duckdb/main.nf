@@ -21,8 +21,10 @@ process CREATE_DUCKDB {
     input:
     path marts
     path metas
-    path selections, stageAs: 'conc*/*'
-    path manifests,  stageAs: 'man*/*'
+    // No stageAs: SELECT_* now names these by fold, so they no longer collide
+    // and each concordance keeps its manifest in the same directory.
+    path selections
+    path manifests
 
     output:
     path "${params.create_duckdb}", emit: db

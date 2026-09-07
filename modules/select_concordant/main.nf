@@ -17,9 +17,17 @@ process SELECT_CONCORDANT {
     tuple val(drug), val(fe), val(fe_name), path(mart), path(meta), val(held_out)
     path db
 
+    // Named by fold, not by a fixed name. Five instances of this process each
+    // emitted 'concordance.parquet' and 'selection.json', so collecting them into
+    // one task collided, and the per-file staging directories added to dodge that
+    // collision then separated each concordance from its manifest -- which the
+    // deposit pairs BY DIRECTORY. The fold belongs in the name: it makes the files
+    // unique at the source, keeps a pair together, and lets a reader recover the
+    // fold from the filename alone.
     output:
     tuple val(drug), val(fe), val(held_out), path(mart), path(meta),
-          path('concordance.parquet'), path('selection.json'), emit: selected
+          path("concordance_${held_out}.parquet"), path("selection_${held_out}.json"),
+          emit: selected
 
     script:
     def arm = held_out == 'none' ? '--refit-on-all' : "--held-out-lineage ${held_out}"
@@ -50,7 +58,7 @@ process SELECT_CONCORDANT {
     # argument as a destination directory: "target 'concordance.parquet': No such
     # file or directory". The benchmark stays in the work directory; it is a
     # comparison against the WHO catalogue, not the selection this process emits.
-    mv causal_concordance_${drug}_${params.candidate_level}_level.parquet concordance.parquet
-    mv *manifest*.json selection.json 2>/dev/null || echo '{}' > selection.json
+    mv causal_concordance_${drug}_${params.candidate_level}_level.parquet concordance_${held_out}.parquet
+    mv *manifest*.json selection_${held_out}.json 2>/dev/null || echo '{}' > selection_${held_out}.json
     """
 }

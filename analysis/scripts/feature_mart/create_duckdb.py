@@ -42,6 +42,19 @@ def _q(v) -> str:
     return "NULL" if v is None else "'" + str(v).replace("'", "''") + "'"
 
 
+def _fold_of(p) -> str:
+    """The held-out fold, from `concordance_<fold>.parquet` / `selection_<fold>.json`.
+
+    Returns "" when the name carries no fold, so a caller can fall back rather
+    than mistake an unknown fold for the refit-on-all arm.
+    """
+    stem = Path(p).stem
+    for prefix in ("concordance_", "selection_"):
+        if stem.startswith(prefix):
+            return stem[len(prefix):]
+    return ""
+
+
 def _read_meta(p: Path) -> dict:
     try:
         return json.loads(p.read_text())
@@ -121,21 +134,36 @@ def main() -> int:
     # which four folds were indistinguishable, which makes the artefact ambiguous
     # and the round-trip back to a training run impossible. Pair each parquet
     # with its manifest and carry those two keys as columns.
-    by_dir = {Path(m).parent: Path(m) for m in a.manifests if Path(m).exists()}
+    # Pair by FOLD, taken from the filename, not by directory. Directory pairing
+    # broke the moment the two inputs were staged into separate per-file dirs:
+    # every lookup missed, every selection silently fell back to drug=NULL and
+    # held_out='none', and five folds collapsed into one indistinguishable table.
+    # The filename carries the fold, so the pairing no longer depends on where a
+    # workflow engine chose to put the file.
+    by_fold = {_fold_of(m): Path(m) for m in a.manifests if Path(m).exists()}
     con.execute("""CREATE TABLE selection_manifests(
         drug VARCHAR, arm VARCHAR, held_out VARCHAR, manifest JSON)""")
+
+    # One campaign is one drug in practice, and marts_index already knows it. Use
+    # it when a manifest is absent, so the selections table is never keyed on NULL.
+    drugs = [r[0] for r in con.execute(
+        "SELECT DISTINCT drug FROM marts_index WHERE drug IS NOT NULL").fetchall()]
+    only_drug = drugs[0] if len(drugs) == 1 else None
 
     parts, n_sel = [], 0
     for sp in (Path(x) for x in a.selections):
         if not sp.exists() or not sp.stat().st_size:
             continue
-        man = _read_meta(by_dir.get(sp.parent, Path("/nonexistent")))
-        drug = str(man.get("drug", "")) or None
+        fold = _fold_of(sp)
+        man = _read_meta(by_fold.get(fold, Path("/nonexistent")))
+        drug = str(man.get("drug", "")) or only_drug
         # A selection with no held-out lineage is the refit-on-all arm, so "none"
         # is the right key rather than a guess. NULL would be unusable: the fold
         # is half the primary key a reader needs to find one training unit, and
         # SELECT_FULL's manifest is sometimes the empty {} the module falls back to.
-        held = str(man.get("held_out_lineage", "") or "").strip() or "none"
+        # The filename is authoritative for the fold; the manifest only enriches it.
+        # A manifest that failed to arrive must not silently relabel a fold "none".
+        held = fold or str(man.get("held_out_lineage", "") or "").strip() or "none"
         rel = con.execute("SELECT DISTINCT cryptic_version FROM marts_index "
                           "WHERE cryptic_version IS NOT NULL").fetchall()
         relv = rel[0][0] if len(rel) == 1 else None
