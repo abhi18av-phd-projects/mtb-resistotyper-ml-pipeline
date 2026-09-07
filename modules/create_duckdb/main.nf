@@ -8,6 +8,14 @@
 process CREATE_DUCKDB {
     tag "${params.experiment}"
     label 'mart'
+    // A deposit stage must not be able to kill a campaign. Nothing downstream
+    // reads this file, so its failure costs a deposit and nothing else -- but
+    // an un-ignored failure propagates to the head, the head exits non-zero,
+    // Nomad restarts it, and with no cross-run cache the ENTIRE pipeline re-runs.
+    // That happened: six full re-runs across two allocations, ~13 hours of a
+    // shared single-node cluster, because an optional artefact could not be
+    // written.
+    errorStrategy 'ignore'
     publishDir "${params.outdir}/publish", mode: 'copy'
 
     input:
