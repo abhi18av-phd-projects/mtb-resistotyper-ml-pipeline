@@ -19,7 +19,7 @@ process TRAIN_H2O {
           path(concordance), path(selection)
 
     output:
-    tuple val(drug), val(fe), path('h2o/**'), path('h2o_manifest.json'), emit: model
+    tuple val(drug), val(fe), val(held_out), path('h2o/**'), path('h2o_manifest.json'), emit: model
 
     script:
     def heap = "${(task.memory.toGiga() * 0.8) as int}G"
@@ -52,6 +52,7 @@ process TRAIN_H2O {
         --sort-metric ${params.h2o_sort_metric} \\
         ${params.h2o_balance_classes ? '--balance-classes' : ''} \\
         --h2o-mem ${heap} \\
+        ${held_out == 'none' ? '' : "--held-out-lineage ${held_out}"} \\
         --out \$OLDPWD/h2o/
 
     cd \$OLDPWD

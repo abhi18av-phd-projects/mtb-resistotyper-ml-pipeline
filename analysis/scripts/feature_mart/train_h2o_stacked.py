@@ -81,16 +81,26 @@ FOLD_COL = "__fold__"
 # --------------------------------------------------------------------------- #
 # feature-set plumbing (shared shape with train_h2o.py)
 # --------------------------------------------------------------------------- #
-def _covariates(df: pd.DataFrame) -> list[str]:
-    cov = [
-        "cov__lineage_L1", "cov__lineage_L2", "cov__lineage_L3", "cov__lineage_L4",
-        "cov__median_coverage", "cov__tb_breadth",
-    ]
+LINEAGE_COV = ["cov__lineage_L1", "cov__lineage_L2", "cov__lineage_L3", "cov__lineage_L4"]
+
+
+def _covariates(df: pd.DataFrame, drop_lineage: bool = False) -> list[str]:
+    """Model covariates, optionally without the lineage one-hots.
+
+    They must be dropped whenever a whole lineage is held out. Within such a
+    split the one-hot is constant on each side, so it identifies the held-out
+    group exactly: the model is handed the grouping variable as a feature, which
+    is the circularity evaluate_cv.py excludes for the same reason.
+    """
+    cov = LINEAGE_COV + ["cov__median_coverage", "cov__tb_breadth"]
+    if drop_lineage:
+        cov = [c for c in cov if c not in LINEAGE_COV]
     return [c for c in cov if c in df.columns]
 
 
-def _feature_columns(df: pd.DataFrame, feature_set: str, concordant: list[str] | None) -> list[str]:
-    cov = _covariates(df)
+def _feature_columns(df: pd.DataFrame, feature_set: str, concordant: list[str] | None,
+                     drop_lineage: bool = False) -> list[str]:
+    cov = _covariates(df, drop_lineage=drop_lineage)
     if feature_set == "denovo":
         return [c for c in df.columns if c.startswith("raw__")] + cov
     if feature_set == "concordant":
@@ -328,7 +338,21 @@ def _fit_surrogate(df, features, model, hf, out_dir) -> dict:
 # --------------------------------------------------------------------------- #
 # orchestration
 # --------------------------------------------------------------------------- #
-def train_one(df, drug, feature_set, features, out_dir, automl_secs, sort_metric, balance_classes) -> dict:
+def _score_holdout(recs, hf_test, label):
+    """AUC of each candidate on rows it never saw. Non-fatal: a scoring failure
+    must not lose a trained model, so the key is simply absent."""
+    for r in recs:
+        try:
+            r["holdout_auc"] = float(r["model"].model_performance(test_data=hf_test).auc())
+        except Exception as exc:                      # noqa: BLE001
+            print(f"  [warn] holdout scoring failed for {r.get(label, '?')}: {exc}")
+    ranked = [r for r in recs if r.get("holdout_auc") is not None]
+    for r in sorted(ranked, key=lambda r: -r["holdout_auc"]):
+        print(f"  holdout {r.get(label, '?'):<14} AUC={r['holdout_auc']:.4f}")
+
+
+def train_one(df, drug, feature_set, features, out_dir, automl_secs, sort_metric,
+              balance_classes, holdout_df=None) -> dict:
     import h2o
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -355,6 +379,28 @@ def train_one(df, drug, feature_set, features, out_dir, automl_secs, sort_metric
 
     print("--- LAYER 3 (hand-built stacked ensembles) ---")
     ens = _train_ensembles(hf, features, y, base, out_dir)
+    holdout = {}
+    if holdout_df is not None and len(holdout_df):
+        # The comparison the leaderboard cannot make. cv_auc is out-of-fold within
+        # the training lineages; this is the score on a lineage no fold contained,
+        # which is the axis evaluate_cv.py reports on. Same rows, same features,
+        # so an H2O candidate and the fixed baseline are finally comparable.
+        print(f"--- HOLD-OUT ({len(holdout_df):,} rows the model never saw) ---")
+        hf_test = h2o.H2OFrame(holdout_df[features + [y]])
+        hf_test[y] = hf_test[y].asfactor()
+        _score_holdout(base, hf_test, "family")
+        _score_holdout(ens, hf_test, "name")
+        scored = [r for r in base + ens if r.get("holdout_auc") is not None]
+        if scored:
+            best = max(scored, key=lambda r: r["holdout_auc"])
+            holdout = {
+                "n_rows": int(len(holdout_df)),
+                "n_resistant": int(holdout_df[y].sum()),
+                "best": best.get("family") or best.get("name"),
+                "best_auc": best["holdout_auc"],
+                "by_model": {(r.get("family") or r.get("name")): r["holdout_auc"] for r in scored},
+            }
+
     pd.DataFrame([{k: e[k] for k in ("name", "metalearner", "n_base_models", "cv_auc", "cv_aucpr", "train_secs")}
                   for e in ens]).to_csv(out_dir / "ensembles.csv", index=False)
 
@@ -393,6 +439,7 @@ def train_one(df, drug, feature_set, features, out_dir, automl_secs, sort_metric
         "stacking_lift_over_best_base": stacking_lift,
         "best_base_family": best_base["family"],
         "best_base_auc": best_base["cv_auc"],
+        "holdout": holdout,
         "surrogate": surrogate,
         "outputs": {
             "mojo": Path(mojo_path).name,
@@ -424,6 +471,11 @@ def main() -> None:
     p.add_argument("--balance-classes", action="store_true",
                    help="enable for the ~1-5%%R drugs (BDQ/LZD/DLM/CFZ); off for RIF/INH.")
     p.add_argument("--h2o-mem", default="6G")
+    p.add_argument("--held-out-lineage", default=None,
+                   help="train without this lineage and score every candidate on "
+                        "it. Turns the run into the EVALUATION arm: comparable to "
+                        "evaluate_cv.py because it is the same held-out rows. "
+                        "Omit for the deployment refit on all data.")
     args = p.parse_args()
 
     os.environ.setdefault("JAVA_HOME", os.path.abspath(".pixi/envs/default/lib/jvm"))
@@ -434,13 +486,26 @@ def main() -> None:
     df = pd.read_parquet(args.mart)
     concordant = _load_concordant(args.concordance)
 
+    # Hold a whole lineage out, or refit on everything. 'none' is accepted so the
+    # workflow can pass the fold value straight through without a conditional.
+    held = (args.held_out_lineage or "").strip()
+    holdout_df = None
+    if held and held.lower() != "none":
+        if "cov__lineage_raw" not in df.columns:
+            raise SystemExit("--held-out-lineage needs cov__lineage_raw in the mart")
+        mask = df["cov__lineage_raw"].astype(str) == held
+        if not mask.any():
+            raise SystemExit(f"--held-out-lineage {held!r} matches no rows")
+        holdout_df, df = df[mask].copy(), df[~mask].copy()
+        print(f"held out {held}: {len(holdout_df):,} rows withheld, {len(df):,} for training")
+
     sets = ["denovo", "concordant"] if args.feature_set == "all" else [args.feature_set]
     results = {}
     for fs in sets:
         if fs == "concordant" and not concordant:
             print("skipping concordant set — no --concordance results provided")
             continue
-        feats = _feature_columns(df, fs, concordant)
+        feats = _feature_columns(df, fs, concordant, drop_lineage=bool(holdout_df is not None))
         print(f"\n=== {drug} / feature_set={fs} ({len(feats)} features) ===")
         # Tracking wraps training rather than following it: a run that dies
         # halfway is the one most worth inspecting, and a backfill from
@@ -457,9 +522,12 @@ def main() -> None:
                 "h2o_mem": args.h2o_mem,
                 "mart": args.mart.name,
                 "random_state": RANDOM_STATE,
+                "held_out_lineage": held or "none",
+                "arm": "evaluation" if holdout_df is not None else "deployment",
         }) as tracked:
             results[fs] = train_one(df, drug, fs, feats, out_dir,
-                                    args.automl_secs, args.sort_metric, args.balance_classes)
+                                    args.automl_secs, args.sort_metric, args.balance_classes,
+                                    holdout_df=holdout_df)
             mlflow_tracking.log_manifest(tracked, results[fs], out_dir)
 
     h2o.cluster().shutdown()

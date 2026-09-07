@@ -24,6 +24,7 @@ include { FE_STEP as FE_FOLD } from './modules/fe_step'
 include { SELECT_CONCORDANT } from './modules/select_concordant'
 include { SELECT_CONCORDANT as SELECT_FULL } from './modules/select_concordant'
 include { TRAIN_H2O         } from './modules/train_h2o'
+include { TRAIN_H2O as TRAIN_H2O_FOLD } from './modules/train_h2o'
 include { EVALUATE_CV       } from './modules/evaluate_cv'
 include { TIER_REPORT       } from './modules/tier_report'
 include { CREATE_DUCKDB     } from './modules/create_duckdb'
@@ -140,7 +141,8 @@ workflow {
             evaluation: true
         }
 
-        ch_models = TRAIN_H2O(ch_by_arm.deployment)
+        ch_models      = TRAIN_H2O(ch_by_arm.deployment)
+        ch_models_fold = TRAIN_H2O_FOLD(ch_by_arm.evaluation)
         ch_eval   = EVALUATE_CV(ch_by_arm.evaluation)
         ch_tiers  = TIER_REPORT(
             ch_eval.map { drug, fe, _held_out, manifest -> tuple(drug, fe.name, manifest) }
@@ -285,6 +287,16 @@ workflow {
      */
     ch_models = TRAIN_H2O(ch_sel_full)
 
+    /* ---- F2. the same candidates, on a lineage no fold contained ---------
+     * The leaderboard of F ranks models by out-of-fold AUC within the training
+     * lineages, and EVALUATE_CV reports a held-out lineage using one fixed
+     * gradient-boosted baseline. Those are different models on different rows,
+     * so neither answers whether the H2O apparatus earns its place. This arm
+     * trains the same stack per fold and scores every candidate on the withheld
+     * lineage, which is the axis EVALUATE_CV already reports on.
+     */
+    ch_models_fold = TRAIN_H2O_FOLD(ch_sel_fold)
+
     }
 
     publish:
@@ -294,7 +306,7 @@ workflow {
     folds    = ch_sel_fold
     evals    = ch_eval
     tiers    = ch_tiers
-    models   = ch_models
+    models   = ch_models.mix(ch_models_fold)
 }
 
 
@@ -317,5 +329,7 @@ output {
     folds    { path { r -> "selection/${r[0]}/held-out-${r[2]}" } }
     evals    { path { r -> "evaluation/${r[0]}" } }
     tiers    { path 'tiers' }
-    models   { path { r -> "models/${r[0]}" } }
+    // held_out is r[2]: the deployment refit and four fold models are the same
+    // drug and would otherwise publish to one path and overwrite each other.
+    models   { path { r -> "models/${r[0]}/held-out-${r[2]}" } }
 }

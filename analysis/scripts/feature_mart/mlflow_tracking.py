@@ -170,6 +170,18 @@ def log_manifest(handle, manifest: dict, out_dir: Path) -> None:
         "n_features": manifest["n_features"],
         "wall_time_seconds": manifest["wall_time_seconds"],
     }
+    # The hold-out arm: every candidate scored on a lineage no fold contained.
+    # Namespaced apart from cv_* because they are different questions, and putting
+    # them under one prefix would invite reading an out-of-fold number and a
+    # held-out number off the same axis.
+    ho = manifest.get("holdout") or {}
+    if ho:
+        summary["headline/holdout_best_auc"] = ho.get("best_auc")
+        summary["holdout/n_rows"] = ho.get("n_rows")
+        summary["holdout/n_resistant"] = ho.get("n_resistant")
+        for model_name, auc in (ho.get("by_model") or {}).items():
+            summary[f"holdout/{model_name}_auc"] = auc
+
     best_ens = max((e["cv_auc"] for e in ensembles
                     if isinstance(e.get("cv_auc"), (int, float))), default=None)
     if best_ens is not None:
