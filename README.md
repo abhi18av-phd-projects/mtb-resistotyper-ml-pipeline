@@ -1,7 +1,7 @@
 # mtb-resistotyper-ml-pipeline
 
-Feature engineering and model training for *Mycobacterium tuberculosis* drug-resistance
-prediction, as two Nextflow pipelines.
+Feature engineering, model training and catalogue construction for *Mycobacterium tuberculosis*
+drug-resistance prediction, as two Nextflow pipelines.
 
 ```bash
 # build the database from a CRyPTIC release (rarely)
@@ -9,7 +9,46 @@ nextflow run ./cryptic-db --cryptic_src /path/to/cryptic-tables-v3.4.0
 
 # then engineer features and train (often)
 nextflow run . -params-file experiments/baseline.yml
+
+# or build a mutations catalogue from the same database, and nothing else
+nextflow run . --build_catalogue true --db /path/to/cryptic.duckdb
 ```
+
+## Three ways in
+
+The entry workflow has three top-level branches, and a run takes exactly one of them. They are
+branches rather than named workflows because Nextflow's strict parser refuses `-entry` and says
+so: *"use a param to run a named workflow from the entry workflow"*.
+
+| | flag | runs | stops before |
+|---|---|---|---|
+| **Train** | *(none)* | database → cohort → mart → FE → concordance → training → evaluation | nothing; this is the whole pipeline |
+| **Continue from a deposit** | `--from_duckdb <file>` | training → evaluation, from published artefacts | the database build, FE and selection — unpacked, not recomputed |
+| **Build a catalogue** | `--build_catalogue true` | database → cohort extraction → catomatic → comparison | FE, training and evaluation entirely |
+
+The discipline each branch owes the others is to assign `channel.empty()` to every published
+channel whose stage it skipped. A stage that ran and published nothing is indistinguishable, in
+the output tree, from one that never ran; the empty assignment is what keeps the difference
+legible and stops the workflow failing on an unassigned channel.
+
+Each branch is documented below: training in the sections that follow, the deposit under
+**The publishable artefact**, the catalogue under **Building a mutations catalogue**.
+
+### Testing the flow without running the work
+
+Every process defines a stub, so any of the three branches can be exercised end to end in
+seconds with no container, no database and no cluster:
+
+```bash
+nextflow run . -stub-run --db /dev/null --drugs RIF          # the training path
+nextflow run . -stub-run --build_catalogue true --db /dev/null   # the catalogue path
+```
+
+What that catches is worth stating, because it is what has actually gone wrong here: a tuple
+published to a path built from `r.drug`, both campaign arms fed into one channel, and manifests
+paired by directory instead of by fold. All three are wiring faults, all three shipped, and all
+three cost a full campaign to find — because the only route to the failure was to run the real
+work first. A stub run reaches every one of them before a single task does any computing.
 
 ## The rule the pipeline exists to enforce
 
