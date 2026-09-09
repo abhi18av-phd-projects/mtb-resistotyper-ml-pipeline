@@ -27,7 +27,7 @@ TAG="${TAG:-v0.1.0}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
-IMAGES=("${@:-fe causal h2o}")
+IMAGES=("${@:-fe causal h2o catomatic}")
 read -r -a IMAGES <<< "${IMAGES[*]}"
 
 if ! docker info >/dev/null 2>&1; then

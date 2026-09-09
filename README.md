@@ -109,14 +109,70 @@ nextflow run . -profile nomad -params-file experiments/baseline.yml
 
 ## Containers
 
-Three images, because the stacks are mutually exclusive — `econml`/`dowhy` pin numpy 1.x while
-this project's H2O environment is numpy 2.x. See `containers/README.md`. Each image carries
+Four images, because the stacks are mutually exclusive — `econml`/`dowhy` pin numpy 1.x while
+this project's H2O environment is numpy 2.x, and `mtb-catomatic` carries a catalogue builder
+the other three never call. See `containers/README.md`. Each image carries
 `analysis/` at `/opt/mtb`, which is what lets this repository stay pure Nextflow: a Nomad task
 needs no shared filesystem and no checkout to find its scripts.
 
 **The consequence to remember:** changing an analysis script means rebuilding the image. The
 workflow is versioned by its git tag, the analysis code by the image tag, and the two are
 joined in `nextflow.config`.
+
+## Building a mutations catalogue
+
+`--build_catalogue true` builds a catalogue with [catomatic](https://github.com/fowler-lab/catomatic)
+and **stops**. It runs no feature engineering, no training and no evaluation: a catalogue build
+should not pay for stages that answer a different question. It is a third top-level branch
+alongside `--from_duckdb` and the full path.
+
+```bash
+nextflow run main.nf -profile containers \
+    --build_catalogue true \
+    --db /path/to/cryptic.duckdb \
+    --catalogue_drugs RIF,BDQ \
+    --catalogue_reference /path/to/MTBC-CRyPTICv1.1.1-2025.8.csv
+```
+
+Output lands in `catalogues/<cohort-tag>/<drug>/frs-<threshold>/`: the piezo CSV, the JSON
+catalogue, a build manifest, and — when a reference is given — the comparison.
+
+The reference catalogues live in group storage rather than in this repository:
+`references/catalogues/MTBC-CRyPTICv1.1.1-2025.8.csv` (and the v3.4.0 edition), with a
+`PROVENANCE.json` recording source, checksums and fetch date. `fowler-lab/cryptic-catalogues-2025`
+declares **no licence**, so they are used here and not redistributed. **Match the reference to
+the cohort, not to the database:** a build over the `CRyPTIC-v1.0` tag compares against the
+v1.1.1 catalogue even when the database is v3.4.0.
+
+### Four things that will silently produce the wrong catalogue
+
+Each of these was found by checking a real build against published figures, and each returns a
+plausible catalogue rather than an error. The defaults are set so that none of them is the
+default, and the extraction refuses rather than guesses.
+
+**The phenotype source is `dst_measurements`, not `ukmyc_phenotypes`.** Both carry a binary
+call. On the `CRyPTIC-v1.0` cohort the first yields 39,402 phenotyped samples and the second
+12,324. `ukmyc_phenotypes` is the MIC-plate reading the feature marts use; the DST phenotype is
+what the published catalogues are built on. `--catalogue_phenotype_source` selects, so a
+comparison between them is a run rather than a rewrite.
+
+**FRS is mostly null, so FRS filtering is off.** The column is populated for 10.19% of mutation
+rows in the v3.4.0 build and 0.33% in v2.1.2. `FRS >= 0.9` takes rpoB from 78,542 rows to 60 and
+still returns a catalogue. `--catalogue_frs` is `null` by default and the extraction refuses a
+threshold below 50% coverage unless `--allow-sparse-frs` is passed.
+
+**Restrict the genes.** Unrestricted, a build grades all 1,801 genes the cohort carries,
+including the PE/PPE families no catalogue entry mentions. `--catalogue_genes` defaults to the
+genes named in the original publications: `RIF:rpoB;BDQ:Rv0678,atpE,pepQ`.
+
+**The cohort is a release tag, not a sample list.** `wgs_samples.dataset = 'CRyPTIC-v1.0'`
+recovers 39,545 samples, 39,402 of them phenotyped, against the 39,358 the catomatic paper
+reports — a +44 (0.11%) QC-definition difference. Only the v3.4.0 build publishes that column;
+against v2.1.2 the extraction fails with that explanation rather than building from an
+unfiltered cohort.
+
+Samples carrying contradictory phenotypes for the same drug (271 of them for rifampicin) are
+dropped and counted, not resolved by an unstated rule.
 
 ## The publishable artefact
 

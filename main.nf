@@ -29,6 +29,9 @@ include { EVALUATE_CV       } from './modules/evaluate_cv'
 include { TIER_REPORT       } from './modules/tier_report'
 include { CREATE_DUCKDB     } from './modules/create_duckdb'
 include { UNPACK_DUCKDB     } from './modules/unpack_duckdb'
+include { EXTRACT_COHORT    } from './modules/extract_cohort'
+include { RUN_CATOMATIC     } from './modules/run_catomatic'
+include { COMPARE_CATALOGUE } from './modules/compare_catalogue'
 
 
 /*
@@ -113,7 +116,96 @@ workflow {
      * refuses `-entry`, and says so — "use a param to run a named workflow from
      * the entry workflow".
      */
-    if( params.from_duckdb ) {
+    /* ---- A00. build a catalogue instead ------------------------------------
+     * `--build_catalogue true` builds a mutations catalogue with catomatic and
+     * stops. It runs no feature engineering, no training and no evaluation:
+     * those stages answer a different question and a catalogue build should not
+     * pay for them.
+     *
+     * Third top-level branch rather than a stage inside the pipeline, for the
+     * same reason `from_duckdb` is a branch: the strict parser refuses `-entry`.
+     * Params arrive as STRINGS, and "false" is truthy in Groovy, so the flag is
+     * coerced rather than tested.
+     */
+    if( params.build_catalogue.toString().toBoolean() ) {
+
+        if( params.db ) {
+            ch_cat_db = channel.fromPath(params.db, checkIfExists: true)
+        }
+        else if( params.cryptic_src ) {
+            ch_cat_db = BUILD_SLIM_DB(
+                channel.fromPath(params.cryptic_src, checkIfExists: true)).db
+        }
+        else {
+            error "Provide --db <cryptic.duckdb> or --cryptic_src <cryptic-tables-vX.Y.Z/>"
+        }
+
+        // The RI gate applies here for the same reason it applies to a mart: a
+        // catalogue built on a database that fails its own referential
+        // integrity checks is worse than none, because it looks fine.
+        ch_cat_checked = CHECK_DB(ch_cat_db).summary
+            .combine(ch_cat_db)
+            .map { _summary, db -> db }
+
+        // Fan out over drugs x read-support thresholds. The published sweep
+        // varies FRS at a fixed background and p, so the threshold belongs to
+        // the extraction and each setting is its own comparable unit.
+        ch_cat_frs = params.catalogue_frs
+            ? channel.fromList(params.catalogue_frs.toString().split(',').collect { it.trim() })
+            : channel.of('none')
+
+        // "RIF:rpoB;BDQ:Rv0678,atpE,pepQ" -> [RIF: 'rpoB', BDQ: 'Rv0678,atpE,pepQ']
+        def geneMap = (params.catalogue_genes ?: '').toString().split(';')
+            .findAll { it.trim() }
+            .collectEntries { entry ->
+                def (d, g) = entry.trim().split(':', 2)
+                [(d.trim()): g.trim()]
+            }
+
+        ch_cat_units = channel.fromList(
+                params.catalogue_drugs.toString().split(',').collect { it.trim() })
+            .combine(ch_cat_frs)
+            .combine(ch_cat_checked)
+            .map { drug, frs, db ->
+                tuple(drug, geneMap[drug], params.catalogue_dataset_tag, frs, db) }
+
+        ch_cohort_files = EXTRACT_COHORT(ch_cat_units).cohort
+
+        // The wildcards travel WITH the cohort: they are catomatic's default
+        // rules expanded over the genes this cohort actually contains, so they
+        // are derived from the same extraction rather than from a panel
+        // maintained somewhere else. Override with --catalogue_wildcards when
+        // the rules themselves are the subject rather than a default.
+        ch_cat_ready = params.catalogue_wildcards
+            ? ch_cohort_files.combine(
+                  channel.fromPath(params.catalogue_wildcards, checkIfExists: true))
+                .map { drug, tag, frs, sm, mu, co, _generated, supplied ->
+                       tuple(drug, tag, frs, sm, mu, co, supplied) }
+            : ch_cohort_files
+
+        ch_catalogues = RUN_CATOMATIC(ch_cat_ready).catalogue
+
+        ch_comparisons = params.catalogue_reference
+            ? COMPARE_CATALOGUE(
+                ch_catalogues,
+                channel.fromPath(params.catalogue_reference, checkIfExists: true).first()
+              ).comparison
+            : channel.empty()
+
+        // The stages this path skipped publish nothing; they were not run.
+        ch_checked     = channel.empty()
+        ch_cohort      = channel.empty()
+        ch_marts       = channel.empty()
+        ch_sel_fold    = channel.empty()
+        ch_eval        = channel.empty()
+        ch_tiers       = channel.empty()
+        ch_models      = channel.empty()
+        ch_models_fold = channel.empty()
+    }
+    else if( params.from_duckdb ) {
+        ch_catalogues  = channel.empty()
+        ch_comparisons = channel.empty()
+
         ch_unpacked = UNPACK_DUCKDB(
             channel.fromPath(params.from_duckdb, checkIfExists: true)).index
 
@@ -155,6 +247,9 @@ workflow {
         ch_sel_fold = channel.empty()
     }
     else {
+
+    ch_catalogues  = channel.empty()
+    ch_comparisons = channel.empty()
 
     /* ---- A. the slim database -------------------------------------------
      * Thirteen stages that all mutate ONE 3.5 GB DuckDB file in place, so they
@@ -307,6 +402,8 @@ workflow {
     evals    = ch_eval
     tiers    = ch_tiers
     models   = ch_models.mix(ch_models_fold)
+    catalogues  = ch_catalogues
+    comparisons = ch_comparisons
 }
 
 
@@ -332,4 +429,10 @@ output {
     // held_out is r[2]: the deployment refit and four fold models are the same
     // drug and would otherwise publish to one path and overwrite each other.
     models   { path { r -> "models/${r[0]}/held-out-${r[2]}" } }
+    // catalogues  RUN_CATOMATIC     (drug, dataset_tag, frs, csv, json, build)
+    // comparisons COMPARE_CATALOGUE (drug, dataset_tag, frs, comparison)
+    // One directory per cohort tag, drug and read-support setting: the sweep
+    // publishes many catalogues for one drug and they must not overwrite.
+    catalogues  { path { r -> "catalogues/${r[1]}/${r[0]}/frs-${r[2]}" } }
+    comparisons { path { r -> "catalogues/${r[1]}/${r[0]}/frs-${r[2]}" } }
 }
