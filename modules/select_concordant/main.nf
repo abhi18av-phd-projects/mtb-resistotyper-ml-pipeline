@@ -29,6 +29,12 @@ process SELECT_CONCORDANT {
           path("concordance_${held_out}.parquet"), path("selection_${held_out}.json"),
           emit: selected
 
+    stub:
+    """
+    touch concordance_${held_out}.parquet
+    echo '{"drug":"${drug}","held_out":"${held_out}","stub":true}' > selection_${held_out}.json
+    """
+
     script:
     def arm = held_out == 'none' ? '--refit-on-all' : "--held-out-lineage ${held_out}"
     // Null means causal.py's own default (300). The test profile shrinks it so a

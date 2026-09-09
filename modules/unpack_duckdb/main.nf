@@ -16,6 +16,12 @@ process UNPACK_DUCKDB {
     path "unpacked/units.json", emit: index
     path "unpacked/**",         emit: files
 
+    stub:
+    """
+    mkdir -p unpacked
+    echo '[]' > unpacked/units.json
+    """
+
     script:
     def drugs = params.drugs ? "--drugs ${params.drugs}" : ''
     def arm   = params.from_duckdb_arm ? "--arm ${params.from_duckdb_arm}" : ''

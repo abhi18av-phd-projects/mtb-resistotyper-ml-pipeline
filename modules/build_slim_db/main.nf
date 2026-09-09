@@ -9,6 +9,11 @@ process BUILD_SLIM_DB {
     output:
     tuple path('cryptic-slim.duckdb'), path('build.log'), emit: db
 
+    stub:
+    """
+    touch cryptic-slim.duckdb build.log
+    """
+
     script:
     """
     bash ${params.project_root}/analysis/scripts/build_cryptic_db/run_all.sh \\

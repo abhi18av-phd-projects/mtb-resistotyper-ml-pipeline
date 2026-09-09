@@ -18,6 +18,11 @@ process EVALUATE_CV {
     output:
     tuple val(drug), val(fe), val(held_out), path("fold_${held_out}.json"), emit: metrics
 
+    stub:
+    """
+    echo '{"drug":"${drug}","held_out":"${held_out}","stub":true}' > fold_${held_out}.json
+    """
+
     script:
     """
     # Without these the tracking in evaluate_cv.py degrades to a silent no-op:
