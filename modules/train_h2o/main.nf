@@ -21,6 +21,13 @@ process TRAIN_H2O {
     output:
     tuple val(drug), val(fe), val(held_out), path('h2o/**'), path('h2o_manifest.json'), emit: model
 
+    stub:
+    """
+    mkdir -p h2o
+    touch h2o/model.zip
+    echo '{"drug":"${drug}","held_out":"${held_out}","stub":true}' > h2o_manifest.json
+    """
+
     script:
     def heap = "${(task.memory.toGiga() * 0.8) as int}G"
     """
