@@ -259,7 +259,16 @@ def _confounder_matrix(df: pd.DataFrame) -> pd.DataFrame:
     correctly needs per-mutation causal structure (own-drug vs cross-drug),
     e.g. the attenuation-ratio diagnostic, not blanket conditioning.
     """
-    cols = ["cov__lineage_L1", "cov__lineage_L2", "cov__lineage_L3", "cov__lineage_L4", "cov__median_coverage"]
+    # Selected by intersection, not asserted. cov__median_coverage exists only
+    # where the release published TB_DEPTH: CRyPTIC v3.4.0 does, v2.1.2 does not,
+    # and a mart built from the latter omits the column rather than carrying it
+    # as all-NaN (an all-NaN confounder is rejected outright by econml). Naming
+    # it unconditionally turned a missing covariate into a KeyError that killed
+    # the whole run, which is a worse answer than deconfounding on the lineage
+    # terms alone and saying so.
+    wanted = ["cov__lineage_L1", "cov__lineage_L2", "cov__lineage_L3",
+              "cov__lineage_L4", "cov__median_coverage"]
+    cols = [c for c in wanted if c in df.columns]
     return df[cols].fillna(df[cols].median(numeric_only=True))
 
 

@@ -156,9 +156,17 @@ def train(marts_dir, causal_dir, baseline_path, out_dir):
                                   if nested["honest_auc"] and b.get("lightgbm", {}).get("auc") else None),
             "top_signed_coefficients": catalogue[:10],
         }
+        # The delta is None whenever no baseline manifest was supplied, which is
+        # a state --baseline is already written to allow (the load is guarded by
+        # an exists() check). Formatting it with ":+" then raised TypeError and
+        # took the run down AFTER every per-drug model had been fitted but
+        # BEFORE manifest.json was written -- the most expensive place to fail,
+        # and on the progress line rather than on anything load-bearing.
+        delta = summary[drug]["delta_vs_lightgbm"]
+        delta_str = f"{delta:+}" if delta is not None else "n/a"
         print(f"{drug:<5} C={final_C:<5} honest_loo={nested['honest_auc']} stab={nested['stability_std']} "
               f"| vs C=1 {summary[drug]['baseline_logistic_C1']} vs lgbm {summary[drug]['baseline_lightgbm']} "
-              f"(Δlgbm {summary[drug]['delta_vs_lightgbm']:+})")
+              f"(Δlgbm {delta_str})")
     (out_dir / "manifest.json").write_text(json.dumps(
         {"experiment": "step1 — deployed L2-logistic (nested-CV C-tuning) for usable/moderate tiers",
          "tiers_deployed": DEPLOY, "C_grid": C_GRID,

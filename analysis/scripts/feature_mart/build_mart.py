@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import random
 import time
 from pathlib import Path
@@ -121,21 +122,74 @@ def _read_db_metadata(con) -> dict:
     return {k: v for k, v in rows}
 
 
+_RELEASE_RE = re.compile(r"cryptic-tables-(v[0-9]+(?:\.[0-9]+)*)")
+
+
+def _genome_columns(con) -> set[str]:
+    """Columns the genomes table actually has, upper-cased.
+
+    Not every CRyPTIC build carries the same optional covariates: v3.4.0 has
+    SUBLINEAGE, v2.1.2 does not. Selecting it unconditionally is a binder error
+    that stops the mart before any drug is built, and hard-coding it out would
+    silently drop a real covariate from the release that does have it. So the
+    column is selected when present and NULL-substituted when absent, and the
+    mart metadata records which happened -- two releases whose feature spaces
+    differ must say so, or a comparison between their models is not a
+    comparison of the data.
+    """
+    return _table_columns(con, "genomes")
+
+
+def _table_columns(con, table: str) -> set[str]:
+    """Columns a table actually has, upper-cased."""
+    rows = con.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE lower(table_name) = ?", [table.lower()]).fetchall()
+    return {str(c).upper() for (c,) in rows}
+
+
 def _read_release(con) -> str:
-    """The CRyPTIC release this database was built from.
+    """The CRyPTIC release this database was built from, plus its scope.
 
     Refuses to guess. A wrong release label silently mis-attributes every number
     downstream, and the failure is invisible because the mart still builds.
+
+    The label follows CRyPTIC's own convention -- ``v3.4.0``, ``v2.1.2`` -- and
+    never a build date of ours. ``slim-2026.05`` was such a date, and it names
+    nothing a reader of the compendium could look up: the slim database is built
+    from cryptic-tables-v3.4.0, the same release as the full one. What differs
+    is scope, so scope is what the suffix carries: a database whose metadata
+    records the slim pruning is ``v3.4.0-slim``, and the unpruned build of the
+    same release is ``v3.4.0``. Two sets that differ only in scope must still be
+    distinguishable, or a comparison between them cannot be stated.
+
+    The older slim build predates ``source_version`` and records the release
+    only inside ``source_dir``; that path is parsed rather than rejected,
+    because refusing it would make the one shipped bundle set unnameable.
     """
     meta = _read_db_metadata(con)
+    # source_version is not always the version. Several builds recorded the
+    # source DIRECTORY BASENAME there -- "src" in the full builds, and
+    # "cryptic-tables-v3.4.0" in the slim one -- so the field is normalised
+    # rather than trusted: whatever carries a cryptic-tables-<version> is
+    # reduced to the version, and a bare basename falls through to source_dir.
     v = (meta.get("source_version") or "").strip()
-    if not v or v in {"src", "source", "."}:
+    m = _RELEASE_RE.search(v)
+    if m:
+        v = m.group(1)
+    elif not v or v in {"src", "source", "."} or not v.startswith("v"):
+        m = _RELEASE_RE.search(meta.get("source_dir") or "")
+        v = m.group(1) if m else ""
+    if not v:
         raise SystemExit(
             "the database records no usable source_version "
-            f"(got {v!r}). Rebuild with MTB_CRYPTIC_VERSION set, or backfill "
-            "_database_metadata, before building a mart: a mart that cannot name "
-            "its release cannot be compared with one from another release."
+            "and no release in its source_dir. Rebuild with MTB_CRYPTIC_VERSION "
+            "set, or backfill _database_metadata, before building a mart: a mart "
+            "that cannot name its release cannot be compared with one from "
+            "another release."
         )
+    if any(k.startswith("slim_") for k in meta):
+        return f"{v}-slim"
     return v
 
 
@@ -190,6 +244,45 @@ def build_mart(
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     con = duckdb.connect(str(db_path), read_only=True)
+    # The optional genome covariates, and the type each is read back as. The
+    # two CRyPTIC builds share almost nothing here: v3.4.0's genomes table
+    # carries SUBLINEAGE, TB_DEPTH and TB_COVERAGE; v2.1.2's carries none of
+    # them. Missing ones become NULL of the right type rather than a binder
+    # error, and every one that was missing is named in the mart metadata, so a
+    # model trained on a release without coverage covariates is identifiable as
+    # such instead of looking like one whose coverage happened to be unknown.
+    _present = _genome_columns(con)
+    _optional = {"SUBLINEAGE": "VARCHAR", "TB_DEPTH": "DOUBLE",
+                 "TB_COVERAGE": "DOUBLE"}
+    genome_optional_select = ", ".join(
+        f"g.{col}" if col in _present else f"CAST(NULL AS {typ}) AS {col}"
+        for col, typ in _optional.items())
+    missing_covariates = sorted(c for c in _optional if c not in _present)
+
+    # wgs_samples diverges the same way: v3.4.0 publishes COUNTRY and DATASET,
+    # v2.1.2 publishes neither. They feed cov__country and cov__dataset_version,
+    # which are cohort descriptors rather than genotype, so a NULL is an honest
+    # "not published by this release" and not a silently wrong value.
+    _wgs = _table_columns(con, "wgs_samples")
+    _wgs_optional = {"COUNTRY": "VARCHAR", "DATASET": "VARCHAR"}
+    wgs_optional_select = ", ".join(
+        f"ws.{col}" if col in _wgs else f"CAST(NULL AS {typ}) AS {col}"
+        for col, typ in _wgs_optional.items())
+    missing_covariates += sorted(c for c in _wgs_optional if c not in _wgs)
+
+    # The two NUMERIC covariates are OMITTED when their source column is absent,
+    # not emitted as NULL. A column that is NULL for every row carries no
+    # information, and it is not inert downstream: causal.py hands the covariate
+    # block to econml, which rejects it outright with "Input contains NaN" and
+    # takes the whole run with it. The string covariates above COALESCE to '' and
+    # are harmless either way. Consumers already select covariates by
+    # intersection (`[c for c in COV if c in df.columns]`), so an absent column
+    # is the case they are written for; an all-NaN one is not.
+    _quality_cov = [("TB_DEPTH", "cov__median_coverage"),
+                    ("TB_COVERAGE", "cov__tb_breadth")]
+    quality_covariate_select = "".join(
+        f"{src}::FLOAT AS {name},\n            "
+        for src, name in _quality_cov if src in _present)
 
     # ---- cohort ------------------------------------------------------------
     con.execute(f"""
@@ -197,8 +290,8 @@ def build_mart(
         SELECT ph.UNIQUEID, ph.DRUG,
                ph.BINARY_PHENOTYPE AS truth,
                pr.PREDICTION       AS catalogue,
-               g.LINEAGE, g.SUBLINEAGE, g.TB_DEPTH, g.TB_COVERAGE,
-               ws.country, ws.dataset,
+               g.LINEAGE, {genome_optional_select},
+               {wgs_optional_select},
                ph.PHENOTYPE_QUALITY
         FROM   ukmyc_phenotypes ph
         JOIN   predictions  pr USING (UNIQUEID, DRUG)
@@ -323,15 +416,30 @@ def build_mart(
         GROUP BY UNIQUEID
     """)
 
+    # The minor-allele flag is called IS_MINOR in v3.4.0 and IS_MINOR_ALLELE in
+    # v2.1.2 -- the same measurement under two names, so it is mapped rather than
+    # lost. COVERAGE has no v2.1.2 equivalent: that release never published it,
+    # which is a fact about CRyPTIC and not about this build, so raw__mean_coverage
+    # becomes NULL and is named in missing_mutation_columns. Both are recorded, so
+    # a cross-release comparison can state which features it could not hold equal.
+    _mut = _table_columns(con, "mutations")
+    _minor = next((c for c in ("IS_MINOR", "IS_MINOR_ALLELE") if c in _mut), None)
+    n_minor_select = (f"SUM(CASE WHEN {_minor} THEN 1 ELSE 0 END)::INTEGER"
+                      if _minor else "CAST(NULL AS INTEGER)")
+    mean_coverage_select = ("AVG(COVERAGE)::FLOAT" if "COVERAGE" in _mut
+                            else "CAST(NULL AS FLOAT)")
+    missing_mutation_columns = ([] if "COVERAGE" in _mut else ["COVERAGE"]) + \
+                               ([] if _minor else ["IS_MINOR"])
+
     # Summary columns (n_mutations, mean_frs, mean_coverage) — over ALL
     # mutations carried by the sample, not just the top-N. Honest signal.
-    con.execute("""
+    con.execute(f"""
         CREATE OR REPLACE TEMP TABLE raw_summary AS
         SELECT UNIQUEID,
                COUNT(*)::INTEGER AS raw__n_mutations,
                AVG(FRS)::FLOAT   AS raw__mean_frs,
-               AVG(COVERAGE)::FLOAT AS raw__mean_coverage,
-               SUM(CASE WHEN IS_MINOR THEN 1 ELSE 0 END)::INTEGER AS raw__n_minor
+               {mean_coverage_select} AS raw__mean_coverage,
+               {n_minor_select} AS raw__n_minor
         FROM   mutations
         WHERE  UNIQUEID IN (SELECT UNIQUEID FROM cohort)
         GROUP BY UNIQUEID
@@ -380,7 +488,9 @@ def build_mart(
     """)
 
     # ---- cov__ + qf__ + y__ + id__ section ---------------------------------
-    con.execute("""
+    # f-string: the quality covariates are interpolated, because which of them
+    # exist depends on the release (see quality_covariate_select above).
+    con.execute(f"""
         CREATE OR REPLACE TEMP TABLE core AS
         SELECT
             UNIQUEID                                       AS id__UNIQUEID,
@@ -400,8 +510,7 @@ def build_mart(
             COALESCE(SUBLINEAGE, '')                       AS cov__sublineage,
             COALESCE(country, '')                          AS cov__country,
             COALESCE(dataset, '')                          AS cov__dataset_version,
-            TB_DEPTH::FLOAT                                AS cov__median_coverage,
-            TB_COVERAGE::FLOAT                             AS cov__tb_breadth,
+            {quality_covariate_select}
             -- qf__
             (PHENOTYPE_QUALITY = 'HIGH')                   AS qf__phenotype_quality_high,
             (PHENOTYPE_QUALITY IN ('HIGH','MEDIUM'))       AS qf__phenotype_quality_med_or_high,
@@ -564,6 +673,17 @@ def build_mart(
         "mart_version": mart_version,
         "drug": drug,
         "cryptic_version": cryptic_version,
+        # False means the release has no SUBLINEAGE column and
+        # cov__sublineage is empty for every row here -- a feature-space
+        # difference between releases, recorded so a cross-release
+        # comparison can account for it instead of discovering it.
+        # Empty means the release carried every optional genome covariate.
+        # A non-empty list is a feature-space difference between releases,
+        # recorded so a cross-release comparison can account for it
+        # instead of discovering it.
+        "missing_genome_covariates": missing_covariates,
+        "missing_mutation_columns": missing_mutation_columns,
+        "minor_allele_column": _minor,
         "cryptic_provenance": _read_db_metadata(con),
         "n_samples": len(y_bin),
         "n_R": n_R,
