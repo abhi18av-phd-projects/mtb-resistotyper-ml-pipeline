@@ -28,6 +28,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
 IMAGES=("${@:-fe causal h2o catomatic}")
+BUILT=()
 read -r -a IMAGES <<< "${IMAGES[*]}"
 
 if ! docker info >/dev/null 2>&1; then
@@ -46,6 +47,10 @@ for name in "${IMAGES[@]}"; do
     # the analysis code, which is what keeps the pipeline repo pure Nextflow.
     docker build --build-arg GIT_REVISION="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
         -f "$dockerfile" -t "$tag" "$ROOT"
+    # Record what was built. This array was read by the PUSH branch below but
+    # never written, so `PUSH=1` pushed nothing and said nothing about it --
+    # a publish step that silently publishes zero images.
+    BUILT+=("$tag")
     echo "--- ${tag} built"
 done
 
