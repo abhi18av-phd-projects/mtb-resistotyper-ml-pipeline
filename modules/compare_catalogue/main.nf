@@ -17,11 +17,6 @@ process COMPARE_CATALOGUE {
     tuple val(drug), val(dataset_tag), val(frs),
           path("comparison_${drug}.json"), emit: comparison
 
-    stub:
-    """
-    echo '{"drug":"${drug}","stub":true}' > comparison_${drug}.json
-    """
-
     script:
     """
     cd ${params.project_root} && \\
@@ -32,5 +27,10 @@ process COMPARE_CATALOGUE {
         --out \$OLDPWD/
 
     cd \$OLDPWD
+    """
+
+    stub:
+    """
+    echo '{"drug":"${drug}","stub":true}' > comparison_${drug}.json
     """
 }

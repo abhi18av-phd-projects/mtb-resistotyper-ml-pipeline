@@ -21,14 +21,6 @@ process EXTRACT_COHORT {
           path("cohort_${drug}.json"),
           path("wildcards_${drug}.json"), emit: cohort
 
-    stub:
-    """
-    printf 'UNIQUEID,PHENOTYPE\nstub.1,R\nstub.2,S\n' > samples_${drug}.csv
-    printf 'UNIQUEID,MUTATION\nstub.1,rpoB@S450L\n'    > mutations_${drug}.csv
-    echo '{"drug":"${drug}","dataset_tag":"${dataset_tag}","stub":true}' > cohort_${drug}.json
-    echo '{"rpoB@*=":{"pred":"S"}}' > wildcards_${drug}.json
-    """
-
     script:
     def frs_arg = frs == null || frs == 'none' ? '' : "--frs ${frs}"
     def gene_arg = genes ? "--genes ${genes}" : ''
@@ -44,5 +36,13 @@ process EXTRACT_COHORT {
         --out \$OLDPWD/
 
     cd \$OLDPWD
+    """
+
+    stub:
+    """
+    printf 'UNIQUEID,PHENOTYPE\nstub.1,R\nstub.2,S\n' > samples_${drug}.csv
+    printf 'UNIQUEID,MUTATION\nstub.1,rpoB@S450L\n'    > mutations_${drug}.csv
+    echo '{"drug":"${drug}","dataset_tag":"${dataset_tag}","stub":true}' > cohort_${drug}.json
+    echo '{"rpoB@*=":{"pred":"S"}}' > wildcards_${drug}.json
     """
 }

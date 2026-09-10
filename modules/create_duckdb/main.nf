@@ -32,11 +32,6 @@ process CREATE_DUCKDB {
     when:
     params.create_duckdb
 
-    stub:
-    """
-    touch ${params.create_duckdb}
-    """
-
     script:
     def sel = selections instanceof List ? selections.join(' ') : "${selections}"
     def man = manifests instanceof List ? manifests.join(' ') : "${manifests}"
@@ -49,5 +44,10 @@ process CREATE_DUCKDB {
         --manifests ${man ? man.split(' ').collect { "\$OLDPWD/${it}" }.join(' ') : ''} \\
         --arm ${params.experiment} \\
         --out \$OLDPWD/${params.create_duckdb}
+    """
+
+    stub:
+    """
+    touch ${params.create_duckdb}
     """
 }

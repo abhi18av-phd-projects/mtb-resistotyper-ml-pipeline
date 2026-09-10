@@ -14,17 +14,17 @@ process BUILD_COHORT {
     // exists to order the two, not to hand over data.
     path 'cohort', emit: cohort
 
-    stub:
-    """
-    mkdir -p cohort
-    touch cohort/cohort.parquet cohort/cohort.json
-    """
-
     script:
     """
     cd ${params.project_root} && \\
     ${params.python} -m analysis.scripts.feature_mart.cohort \\
         --db \$OLDPWD/${db} \\
         --out \$OLDPWD/cohort/
+    """
+
+    stub:
+    """
+    mkdir -p cohort
+    touch cohort/cohort.parquet cohort/cohort.json
     """
 }

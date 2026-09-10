@@ -24,12 +24,6 @@ process FE_STEP {
     tuple val(drug), val(fe), val(fe_name), path('fe_mart.parquet'), path(meta),
           val(held_out), path('fe_mart.steps.json'), emit: mart
 
-    stub:
-    """
-    touch fe_mart.parquet
-    echo '{"stub":true}' > fe_mart.steps.json
-    """
-
     script:
     def arm = held_out == 'none' ? '' : "--held-out-lineage ${held_out}"
     """
@@ -42,5 +36,11 @@ process FE_STEP {
         --phase ${phase} \\
         --annotations \$OLDPWD/${annotations} \\
         ${arm}
+    """
+
+    stub:
+    """
+    touch fe_mart.parquet
+    echo '{"stub":true}' > fe_mart.steps.json
     """
 }

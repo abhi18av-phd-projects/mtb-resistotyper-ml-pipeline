@@ -48,12 +48,6 @@ process CHECK_DB {
     path 'ri_summary.tsv',  emit: summary
     path 'ri_summary.json', emit: json
 
-    stub:
-    """
-    printf 'check\tstatus\nstub\tPASS\n' > ri_summary.tsv
-    echo '{"stub":true,"status":"PASS"}' > ri_summary.json
-    """
-
     script:
     """
     bash ${params.project_root}/analysis/scripts/build_cryptic_db/11_ri_checks.sh \\
@@ -64,5 +58,11 @@ process CHECK_DB {
     # orphans would block the run again, and the scoping would be decoration.
     python ${params.project_root}/analysis/scripts/build_cryptic_db/check_integrity.py \\
         --db ${db} --out ri_summary.tsv --json ri_summary.json
+    """
+
+    stub:
+    """
+    printf 'check\tstatus\nstub\tPASS\n' > ri_summary.tsv
+    echo '{"stub":true,"status":"PASS"}' > ri_summary.json
     """
 }

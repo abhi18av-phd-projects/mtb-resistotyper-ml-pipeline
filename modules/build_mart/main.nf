@@ -18,12 +18,6 @@ process BUILD_MART {
           path("feature_mart_${drug}.parquet"),
           path("feature_mart_${drug}.metadata.json"), emit: mart
 
-    stub:
-    """
-    touch feature_mart_${drug}.parquet
-    echo '{"drug":"${drug}","stub":true}' > feature_mart_${drug}.metadata.json
-    """
-
     script:
     """
     cd ${params.project_root} && \\
@@ -43,5 +37,11 @@ process BUILD_MART {
     cd \$OLDPWD
     mv feature_mart_${drug}_*.parquet      feature_mart_${drug}.parquet
     mv feature_mart_${drug}_*.metadata.json feature_mart_${drug}.metadata.json
+    """
+
+    stub:
+    """
+    touch feature_mart_${drug}.parquet
+    echo '{"drug":"${drug}","stub":true}' > feature_mart_${drug}.metadata.json
     """
 }

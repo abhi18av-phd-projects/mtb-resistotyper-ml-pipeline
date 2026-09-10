@@ -18,11 +18,6 @@ process TIER_REPORT {
     output:
     tuple val(drug), path("tiers_${drug}_${fe_name}.json"), emit: tiers
 
-    stub:
-    """
-    echo '{"drug":"${drug}","stub":true}' > tiers_${drug}_${fe_name}.json
-    """
-
     script:
     """
     ${params.python} ${params.project_root}/analysis/scripts/feature_mart/tier_report.py \\
@@ -30,5 +25,10 @@ process TIER_REPORT {
         --feature-set ${params.h2o_feature_set} \\
         --folds ${folds} \\
         --out tiers_${drug}_${fe_name}.json
+    """
+
+    stub:
+    """
+    echo '{"drug":"${drug}","stub":true}' > tiers_${drug}_${fe_name}.json
     """
 }
