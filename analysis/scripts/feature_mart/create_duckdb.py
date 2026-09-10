@@ -42,17 +42,28 @@ def _q(v) -> str:
     return "NULL" if v is None else "'" + str(v).replace("'", "''") + "'"
 
 
-def _fold_of(p) -> str:
-    """The held-out fold, from `concordance_<fold>.parquet` / `selection_<fold>.json`.
+def _unit_of(p) -> tuple[str, str]:
+    """(drug, fold) from `concordance_<DRUG>_<fold>.parquet` / `selection_<DRUG>_<fold>.json`.
 
-    Returns "" when the name carries no fold, so a caller can fall back rather
-    than mistake an unknown fold for the refit-on-all arm.
+    Both come from the filename. Naming by fold alone was unique for one drug and
+    collided for two: CREATE_DUCKDB collects every drug's selections into one
+    task, so RIF and INH each staged a `concordance_lineage1.parquet`. Neither a
+    drug code (RIF, BDQ) nor a fold (lineage1..lineage4, none) contains an
+    underscore, so the LAST underscore separates them.
+
+    A legacy fold-only name (`concordance_lineage1`) yields drug "" so the
+    caller can fall back to the manifest; an unrecognised name yields ("", ""),
+    so an unknown fold is never mistaken for the refit-on-all arm.
     """
     stem = Path(p).stem
     for prefix in ("concordance_", "selection_"):
         if stem.startswith(prefix):
-            return stem[len(prefix):]
-    return ""
+            rest = stem[len(prefix):]
+            if "_" in rest:
+                drug, fold = rest.rsplit("_", 1)
+                return drug, fold
+            return "", rest
+    return "", ""
 
 
 def _read_meta(p: Path) -> dict:
@@ -70,9 +81,8 @@ def main() -> int:
     ap.add_argument("--selections", nargs="*", default=[],
                     help="concordance parquet files")
     ap.add_argument("--manifests", nargs="*", default=[],
-                    help="selection.json manifests, paired with --selections by "
-                         "directory. They carry the drug and the held-out fold, "
-                         "which the concordance parquet does not.")
+                    help="selection_<DRUG>_<fold>.json manifests, paired with "
+                         "--selections by (drug, fold) parsed from the filename.")
     ap.add_argument("--out", required=True, help="DuckDB file to write")
     ap.add_argument("--arm", default="", help="campaign arm this run belongs to")
     a = ap.parse_args()
@@ -134,13 +144,14 @@ def main() -> int:
     # which four folds were indistinguishable, which makes the artefact ambiguous
     # and the round-trip back to a training run impossible. Pair each parquet
     # with its manifest and carry those two keys as columns.
-    # Pair by FOLD, taken from the filename, not by directory. Directory pairing
-    # broke the moment the two inputs were staged into separate per-file dirs:
-    # every lookup missed, every selection silently fell back to drug=NULL and
-    # held_out='none', and five folds collapsed into one indistinguishable table.
-    # The filename carries the fold, so the pairing no longer depends on where a
-    # workflow engine chose to put the file.
-    by_fold = {_fold_of(m): Path(m) for m in a.manifests if Path(m).exists()}
+    # Pair by (DRUG, FOLD), taken from the filename, not by directory and not by
+    # fold alone. Directory pairing broke the moment the two inputs were staged
+    # into separate per-file dirs: every lookup missed, every selection silently
+    # fell back to drug=NULL and held_out='none', and five folds collapsed into
+    # one indistinguishable table. Fold-only pairing then held for exactly one
+    # drug -- with two, RIF's lineage1 manifest and INH's share a key and one
+    # silently overwrites the other.
+    by_unit = {_unit_of(m): Path(m) for m in a.manifests if Path(m).exists()}
     con.execute("""CREATE TABLE selection_manifests(
         drug VARCHAR, arm VARCHAR, held_out VARCHAR, manifest JSON)""")
 
@@ -154,9 +165,11 @@ def main() -> int:
     for sp in (Path(x) for x in a.selections):
         if not sp.exists() or not sp.stat().st_size:
             continue
-        fold = _fold_of(sp)
-        man = _read_meta(by_fold.get(fold, Path("/nonexistent")))
-        drug = str(man.get("drug", "")) or only_drug
+        name_drug, fold = _unit_of(sp)
+        man = _read_meta(by_unit.get((name_drug, fold), Path("/nonexistent")))
+        # The filename is authoritative for the drug, as it is for the fold. The
+        # manifest and the single-drug fallback only serve legacy fold-only names.
+        drug = name_drug or str(man.get("drug", "")) or only_drug
         # A selection with no held-out lineage is the refit-on-all arm, so "none"
         # is the right key rather than a guess. NULL would be unusable: the fold
         # is half the primary key a reader needs to find one training unit, and

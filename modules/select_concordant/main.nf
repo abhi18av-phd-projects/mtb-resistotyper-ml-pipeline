@@ -17,23 +17,21 @@ process SELECT_CONCORDANT {
     tuple val(drug), val(fe), val(fe_name), path(mart), path(meta), val(held_out)
     path db
 
-    // Named by fold, not by a fixed name. Five instances of this process each
-    // emitted 'concordance.parquet' and 'selection.json', so collecting them into
-    // one task collided, and the per-file staging directories added to dodge that
+    // Named by drug AND fold. Five instances of this process each emitted
+    // 'concordance.parquet' and 'selection.json', so collecting them into one task
+    // collided, and the per-file staging directories added to dodge that
     // collision then separated each concordance from its manifest -- which the
-    // deposit pairs BY DIRECTORY. The fold belongs in the name: it makes the files
-    // unique at the source, keeps a pair together, and lets a reader recover the
-    // fold from the filename alone.
+    // deposit pairs BY DIRECTORY. Naming by fold fixed one drug and broke two:
+    // CREATE_DUCKDB collects every drug's selections, so RIF and INH both emitted
+    // `concordance_lineage1.parquet` and the task refused the collision. The
+    // single-drug campaign never reached it; a two-drug -stub-run does in
+    // seconds. Drug and fold together make the files unique at the source, keep
+    // a pair together, and let a reader recover both from the filename alone.
     output:
     tuple val(drug), val(fe), val(held_out), path(mart), path(meta),
-          path("concordance_${held_out}.parquet"), path("selection_${held_out}.json"),
+          path("concordance_${drug}_${held_out}.parquet"),
+          path("selection_${drug}_${held_out}.json"),
           emit: selected
-
-    stub:
-    """
-    touch concordance_${held_out}.parquet
-    echo '{"drug":"${drug}","held_out":"${held_out}","stub":true}' > selection_${held_out}.json
-    """
 
     script:
     def arm = held_out == 'none' ? '--refit-on-all' : "--held-out-lineage ${held_out}"
@@ -64,7 +62,13 @@ process SELECT_CONCORDANT {
     # argument as a destination directory: "target 'concordance.parquet': No such
     # file or directory". The benchmark stays in the work directory; it is a
     # comparison against the WHO catalogue, not the selection this process emits.
-    mv causal_concordance_${drug}_${params.candidate_level}_level.parquet concordance_${held_out}.parquet
-    mv *manifest*.json selection_${held_out}.json 2>/dev/null || echo '{}' > selection_${held_out}.json
+    mv causal_concordance_${drug}_${params.candidate_level}_level.parquet concordance_${drug}_${held_out}.parquet
+    mv *manifest*.json selection_${drug}_${held_out}.json 2>/dev/null || echo '{}' > selection_${drug}_${held_out}.json
+    """
+
+    stub:
+    """
+    touch concordance_${drug}_${held_out}.parquet
+    echo '{"drug":"${drug}","held_out":"${held_out}","stub":true}' > selection_${drug}_${held_out}.json
     """
 }
