@@ -80,6 +80,13 @@ def compare(built: Path, reference: Path, drug: str, out_dir: Path) -> dict:
         "n_agree": len(agree),
         "pct_agree": round(100.0 * len(agree) / len(shared), 2) if shared else None,
         "n_disagree": len(disagree),
+        # Two readings, both reported, because they answer different questions
+        # and the published tables are not always explicit about which they
+        # quote. The COUNT compares how many R calls each catalogue makes; the
+        # RECOVERY asks how many of the reference's specific R mutations this
+        # build also called R. A catalogue can match on count while disagreeing
+        # on which mutations are resistant.
+        "resistance_calls_built": len([m for m, c in a.items() if c == "R"]),
         "resistance_calls_reference": len(ref_r),
         "resistance_calls_recovered": len(recovered_r),
         "resistance_recovery": f"{len(recovered_r)} of {len(ref_r)}",
