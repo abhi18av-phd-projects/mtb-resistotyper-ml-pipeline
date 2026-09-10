@@ -173,6 +173,18 @@ needs no shared filesystem and no checkout to find its scripts.
 workflow is versioned by its git tag, the analysis code by the image tag, and the two are
 joined in `nextflow.config`.
 
+**Releasing an image** is a tag push; `.github/workflows/images.yml` builds, verifies and
+publishes it. One tag per image, because the four version independently:
+
+```bash
+# 1. bump the pin in nextflow.config (e.g. fe_container_tag = 'v0.4.5') and commit
+# 2. tag that commit and push the tag
+git tag mtb-fe-v0.4.5 && git push origin mtb-fe-v0.4.5
+```
+
+The workflow refuses a tag whose version differs from the pin, an image whose FE code does not
+match `FE_VERSION`, and any tag that already exists on the registry.
+
 ## Building a mutations catalogue
 
 `--build_catalogue true` builds a catalogue with [catomatic](https://github.com/fowler-lab/catomatic)

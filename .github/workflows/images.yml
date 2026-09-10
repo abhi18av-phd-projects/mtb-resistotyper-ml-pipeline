@@ -1,0 +1,108 @@
+# Build and publish one pipeline image when its release tag is pushed.
+#
+# Tag scheme -- one tag per image, because the four images version
+# independently and a tag should claim exactly one of them:
+#
+#   mtb-fe-v0.4.4         -> ghcr.io/<owner>/<repo>/mtb-fe:v0.4.4
+#   mtb-causal-v0.3.2     -> .../mtb-causal:v0.3.2
+#   mtb-h2o-v0.3.3        -> .../mtb-h2o:v0.3.3
+#   mtb-catomatic-v0.1.2  -> .../mtb-catomatic:v0.1.2
+#
+# Release order: bump the pin in nextflow.config, commit, then tag that commit.
+# The workflow refuses a tag whose version does not match the pin, so a
+# published image is always the one the committed config names.
+#
+# Guards, each for a failure this project has already had:
+#   * FE lock -- the FE code baked into an image must match FE_VERSION;
+#     otherwise models built with it record an FE version they do not use.
+#   * pin match -- an image nobody's config names is a published orphan.
+#   * immutability -- an existing tag is never overwritten; a pushed tag is a
+#     claim about content, and re-pushing it silently changes that claim.
+#   * verification -- the built image must import its modules before it is
+#     pushed, not after someone's run fails on it.
+name: images
+
+on:
+  push:
+    tags:
+      - "mtb-fe-v*"
+      - "mtb-causal-v*"
+      - "mtb-h2o-v*"
+      - "mtb-catomatic-v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse the tag
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME}"                       # mtb-fe-v0.4.4
+          name="${tag%-v*}"                              # mtb-fe
+          version="v${tag##*-v}"                         # v0.4.4
+          image="${name#mtb-}"                           # fe
+          case "$image" in
+            fe)        pin=fe_container_tag ;;
+            causal)    pin=container_tag ;;
+            h2o)       pin=h2o_container_tag ;;
+            catomatic) pin=catalogue_container_tag ;;
+            *) echo "unknown image in tag $tag"; exit 1 ;;
+          esac
+          [ -f "containers/$image/Dockerfile" ] || { echo "no containers/$image/Dockerfile"; exit 1; }
+          registry="ghcr.io/${GITHUB_REPOSITORY,,}"
+          {
+            echo "image=$image"; echo "version=$version"; echo "pin=$pin"
+            echo "ref=$registry/$name:$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Tag version must equal the pin in nextflow.config
+        run: |
+          pinned=$(grep -E "^\s*${{ steps.tag.outputs.pin }}\s*=" nextflow.config | head -1 | sed -E "s/.*'([^']+)'.*/\1/")
+          echo "nextflow.config pins ${{ steps.tag.outputs.pin }} = $pinned"
+          [ "$pinned" = "${{ steps.tag.outputs.version }}" ] || {
+            echo "tag says ${{ steps.tag.outputs.version }} but nextflow.config pins $pinned";
+            echo "bump the pin, commit, and tag that commit"; exit 1; }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: FE version matches the FE code
+        run: python -m analysis.scripts.feature_mart.fe_identity --check
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite a published tag
+        run: |
+          if docker manifest inspect "${{ steps.tag.outputs.ref }}" >/dev/null 2>&1; then
+            echo "${{ steps.tag.outputs.ref }} already exists; tags are immutable"; exit 1
+          fi
+
+      - name: Build
+        run: |
+          docker build \
+            --build-arg GIT_REVISION="$(git rev-parse --short HEAD)" \
+            -f "containers/${{ steps.tag.outputs.image }}/Dockerfile" \
+            -t "${{ steps.tag.outputs.ref }}" .
+
+      - name: Verify the image before publishing it
+        run: |
+          py=python; [ "${{ steps.tag.outputs.image }}" = h2o ] && py=python3.11
+          docker run --rm "${{ steps.tag.outputs.ref }}" sh -c "cd /opt/mtb && \
+            $py -m analysis.scripts.feature_mart.fe_identity --check && \
+            $py -c 'import analysis.scripts.feature_mart.fe_identity as f; print(\"FE\", f.FE_VERSION)'"
+          label=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${{ steps.tag.outputs.ref }}")
+          [ "$label" = "$(git rev-parse --short HEAD)" ] || { echo "revision label $label does not match HEAD"; exit 1; }
+
+      - name: Push
+        run: docker push "${{ steps.tag.outputs.ref }}"
