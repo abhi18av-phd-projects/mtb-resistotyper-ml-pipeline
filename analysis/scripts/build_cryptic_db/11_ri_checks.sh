@@ -20,7 +20,8 @@ source "$SCRIPT_DIR/_lib.sh"
 resolve_args "$@"
 stage_start "11_ri_checks"
 
-# `variants` is release-dependent (v3.4.0 ships no VARIANTS.parquet). Omit its
+# `variants` is optional in the build, not in the release: every CRyPTIC release
+# through v3.4.0 ships VARIANTS.parquet, but stage 09 may be skipped. Omit its
 # integrity check rather than report it as passing: a check that silently does
 # not run is worse than one that is visibly absent, because the summary would
 # read clean while one relation went unexamined.
