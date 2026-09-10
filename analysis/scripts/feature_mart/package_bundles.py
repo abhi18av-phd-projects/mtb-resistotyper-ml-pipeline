@@ -41,6 +41,11 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from analysis.scripts.feature_mart import fe_identity
+except ImportError:  # run as a plain script from this directory
+    import fe_identity
+
 # The boundary the shipped bundles were tiered on: MXF 0.927 and EMB 0.909 are
 # "usable", ETH 0.891 and KAN 0.883 "moderate". Stated here rather than left
 # implicit, because tier_report.py uses 0.88 for the same word; recorded in
@@ -179,6 +184,14 @@ def main() -> None:
     p.add_argument("--licence-file", type=Path, default=None)
     p.add_argument("--pipeline-revision", default="unrecorded")
     p.add_argument("--images", default="unrecorded")
+    p.add_argument("--fe-pre-steps", default="", help="label-free FE steps that ran")
+    p.add_argument("--fe-fold-steps", default="", help="label-using FE steps that ran")
+    p.add_argument("--fe-code-root", type=Path, default=None,
+                   help="analysis/scripts tree at the revision that built these "
+                        "marts, for marts written before they recorded their FE")
+    p.add_argument("--fe-version", default=None,
+                   help="assign an FE version to marts that predate it (verified "
+                        "output-equivalent); default: the mart's own, else current")
     a = p.parse_args()
 
     manifest = json.loads((a.models / "manifest.json").read_text())
@@ -195,14 +208,30 @@ def main() -> None:
             raise SystemExit(
                 f"{drug}: the mart metadata names no cryptic_version, so the "
                 "release cannot state which data trained it.")
-        built.append((drug, model, per_drug.get(drug, {}), meta, meta_path))
+        sel_path = (a.causal / drug / "manifest.json") if a.causal else None
+        sel = json.loads(sel_path.read_text()) if sel_path and sel_path.exists() else {}
+        ident = fe_identity.identity(meta, sel, a.fe_pre_steps, a.fe_fold_steps,
+                                     code_root=a.fe_code_root, fe_version=a.fe_version)
+        ident["mart_id"] = fe_identity.mart_id(
+            ident["fe_id"], (meta.get("source_db") or {}).get("checksum_sha256"))
+        built.append((drug, model, per_drug.get(drug, {}), meta, meta_path, ident))
 
-    releases = {m["cryptic_version"] for _, _, _, m, _ in built}
+    releases = {m["cryptic_version"] for _, _, _, m, _, _ in built}
     if len(releases) != 1:
         raise SystemExit(f"one release per package; these marts span {sorted(releases)}")
     release = releases.pop()
+    # FE is drug-independent (the determinant-gene map is recorded whole), so one
+    # release carries one fe_id. More than one means the drugs were not built
+    # with the same technique, which a single release must not hide.
+    fe_ids = sorted({i["fe_id"] for *_, i in built})
+    fe_versions = sorted({i["fe_version"] for *_, i in built})
+    if len(fe_ids) != 1 or len(fe_versions) != 1:
+        raise SystemExit(f"one FE technique per release; these drugs span {fe_ids} {fe_versions}")
+    fe_v, fe_i, fe_config = fe_versions[0], fe_ids[0], built[0][5]["fe_config"]
 
-    root = a.out / f"mtb-resistotyper-ml-models-{release}"
+    # The release is a (database, FE version) pair, and its name says so.
+    tag = f"{release}+fe{fe_v}"
+    root = a.out / f"mtb-resistotyper-ml-models-{tag}"
     if root.exists():
         shutil.rmtree(root)
     (root / "models").mkdir(parents=True)
@@ -210,7 +239,7 @@ def main() -> None:
     (root / "provenance" / "selection").mkdir(parents=True)
 
     rows, missing = [], set()
-    for drug, model, summary, meta, meta_path in built:
+    for drug, model, summary, meta, meta_path, ident in built:
         d = root / "models" / drug
         d.mkdir()
         (d / "model.json").write_text(json.dumps(model, indent=2) + "\n")
@@ -280,6 +309,9 @@ def main() -> None:
                 "mart": meta.get("mart_version"),
                 "pipeline_revision": a.pipeline_revision,
                 "images": a.images,
+                "fe_version": ident["fe_version"],
+                "fe_id": ident["fe_id"],
+                "mart_id": ident["mart_id"],
                 "packaged_by": "analysis.scripts.feature_mart.package_bundles",
             },
             "intended_use": ("Layer 2. Fires only where the curated WHO catalogue "
@@ -306,6 +338,11 @@ def main() -> None:
 
     (root / "MANIFEST.json").write_text(json.dumps({
         "release": release,
+        "tag": tag,
+        "fe_version": fe_v,
+        "fe_id": fe_i,
+        "mart_ids": {d: i["mart_id"] for d, *_, i in built},
+        "fe_config": fe_config,
         "packaged_utc": stamp,
         "pipeline_revision": a.pipeline_revision,
         "images": a.images,
@@ -315,13 +352,20 @@ def main() -> None:
         "models": rows,
     }, indent=2) + "\n")
     (root / "README.md").write_text(_readme(release, rows, missing_l,
-                                            a.pipeline_revision, a.images))
+                                            a.pipeline_revision, a.images)
+                                    .replace(f"# mtb-resistotyper-ml-models {release}",
+                                             f"# mtb-resistotyper-ml-models {tag}", 1)
+                                    + f"\nFeature engineering: FE {fe_v} (`{fe_i}`). The "
+                                      "full FE configuration -- settings, determinant genes, "
+                                      "steps, selection -- is in MANIFEST.json under "
+                                      "`fe_config`; `fe_id` is shared by every release built "
+                                      "with the same technique.\n")
     if a.licence_file and a.licence_file.exists():
         shutil.copy2(a.licence_file, root / "LICENSE")
-    title = (f"mtb-resistotyper-ml-models {release}: per-drug resistance models "
-             f"for M. tuberculosis trained on CRyPTIC {release}")
+    title = (f"mtb-resistotyper-ml-models {tag}: per-drug resistance models "
+             f"for M. tuberculosis trained on CRyPTIC {release}, FE {fe_v}")
     (root / ".zenodo.json").write_text(json.dumps({
-        "title": title, "upload_type": "dataset", "version": release,
+        "title": title, "upload_type": "dataset", "version": tag,
         "license": a.licence, "creators": CREATORS,
         "keywords": ["antimicrobial resistance", "tuberculosis", "machine learning",
                      "model distribution", "lineage-aware evaluation", "CRyPTIC"],
@@ -337,7 +381,7 @@ def main() -> None:
         "cff-version: 1.2.0\n"
         'message: "If you use these models, please cite the accompanying article."\n'
         f'title: "{title}"\n'
-        f'version: "{release}"\n'
+        f'version: "{tag}"\n'
         "authors:\n  - family-names: Sharma\n    given-names: Abhinav\n"
         '    orcid: "https://orcid.org/0000-0002-6402-6993"\n'
         f"license: {a.licence}\ntype: dataset\n")
@@ -348,6 +392,7 @@ def main() -> None:
 
     for r in rows:
         print(f"{r['drug']:<5} {release:<12} auc={r['auc']:.4f} tier={r['tier']}")
+    print(f"FE {fe_v} ({fe_i})")
     print(f"wrote {len(rows)} models -> {root}")
 
 

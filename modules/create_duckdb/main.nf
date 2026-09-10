@@ -43,6 +43,8 @@ process CREATE_DUCKDB {
         --selections ${sel ? sel.split(' ').collect { "\$OLDPWD/${it}" }.join(' ') : ''} \\
         --manifests ${man ? man.split(' ').collect { "\$OLDPWD/${it}" }.join(' ') : ''} \\
         --arm ${params.experiment} \\
+        --fe-pre-steps '${params.fe_pre_steps ?: ''}' \\
+        --fe-fold-steps '${params.fe_fold_steps ?: ''}' \\
         --out \$OLDPWD/${params.create_duckdb}
     """
 

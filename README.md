@@ -55,6 +55,16 @@ paired by directory instead of by fold. All three are wiring faults, all three s
 three cost a full campaign to find — because the only route to the failure was to run the real
 work first. A stub run reaches every one of them before a single task does any computing.
 
+## Feature-engineering versions
+
+Every mart, deposit and model records **which feature engineering produced it**:
+an `fe_version` (semantic, declared, and forced to move when FE code changes), an
+`fe_id` (a hash of the FE configuration, identical across CRyPTIC releases when
+the technique is the same), and a `mart_id` (that FE on that database). They are
+written into mart sidecars, the DuckDB deposit, H2O MOJOs, MLflow tags and model
+releases. See [`docs/fe-versioning.md`](docs/fe-versioning.md); the history is in
+`analysis/scripts/feature_mart/FE_CHANGELOG.md`.
+
 ## The rule the pipeline exists to enforce
 
 Every feature-engineering step declares whether it reads the phenotype label, and that

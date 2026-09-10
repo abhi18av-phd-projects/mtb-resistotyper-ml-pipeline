@@ -30,6 +30,11 @@ from pathlib import Path
 
 import duckdb
 
+try:
+    from analysis.scripts.feature_mart import fe_identity
+except ImportError:  # run as a plain script from this directory
+    import fe_identity
+
 SAFE = re.compile(r"[^A-Za-z0-9_]")
 
 
@@ -85,6 +90,8 @@ def main() -> int:
                          "--selections by (drug, fold) parsed from the filename.")
     ap.add_argument("--out", required=True, help="DuckDB file to write")
     ap.add_argument("--arm", default="", help="campaign arm this run belongs to")
+    ap.add_argument("--fe-pre-steps", default="", help="label-free FE steps that ran")
+    ap.add_argument("--fe-fold-steps", default="", help="label-using FE steps that ran")
     a = ap.parse_args()
 
     out = Path(a.out)
@@ -102,7 +109,17 @@ def main() -> int:
         table_name VARCHAR, drug VARCHAR, arm VARCHAR, cryptic_version VARCHAR,
         mart_version VARCHAR, catalogue VARCHAR,
         n_rows BIGINT, n_columns BIGINT, n_features BIGINT,
-        n_resistant BIGINT, n_susceptible BIGINT)""")
+        n_resistant BIGINT, n_susceptible BIGINT,
+        fe_version VARCHAR, fe_id VARCHAR, mart_id VARCHAR)""")
+    # The FE technique behind each mart, once per fe_id. fe_id excludes the
+    # database, so marts of one technique on two releases share a row here and
+    # differ only in mart_id -- the join a cross-release comparison needs.
+    con.execute("""CREATE TABLE fe_identity(
+        fe_id VARCHAR, fe_version VARCHAR, fe_config JSON)""")
+    fe_seen: set[str] = set()
+    # Selection manifests by (drug, fold), read up front: a mart's FE identity
+    # includes the selection settings, so it is needed while indexing marts.
+    by_unit = {_unit_of(m): Path(m) for m in a.manifests if Path(m).exists()}
     con.execute("""CREATE TABLE provenance(
         drug VARCHAR, arm VARCHAR, key VARCHAR, value VARCHAR)""")
 
@@ -130,12 +147,30 @@ def main() -> int:
         for k, v in meta.items():
             con.execute("INSERT INTO provenance VALUES (?,?,?,?)",
                         [drug, a.arm, k, json.dumps(v) if isinstance(v, (dict, list)) else str(v)])
-        con.execute("INSERT INTO marts_index VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        # Prefer the refit-on-all selection; any fold's settings are the same.
+        sel = next((by_unit[k] for k in ((drug, "none"),) if k in by_unit), None) \
+            or next((v for (d, _f), v in by_unit.items() if d == drug), None)
+        try:
+            ident = fe_identity.identity(meta, _read_meta(sel) if sel else {},
+                                         a.fe_pre_steps, a.fe_fold_steps)
+            fe_v, fe_i = ident["fe_version"], ident["fe_id"]
+            m_i = fe_identity.mart_id(fe_i, (meta.get("source_db") or {}).get("checksum_sha256"))
+            if fe_i not in fe_seen:
+                con.execute("INSERT INTO fe_identity VALUES (?,?,?)",
+                            [fe_i, fe_v, json.dumps(ident["fe_config"])])
+                fe_seen.add(fe_i)
+        except SystemExit as exc:
+            # A mart built before the FE block existed has no recorded identity,
+            # and this process cannot vouch for the code that built it. NULL is
+            # the honest value; the deposit says so rather than guessing.
+            print(f"  {drug}: no FE identity ({exc})")
+            fe_v = fe_i = m_i = None
+        con.execute("INSERT INTO marts_index VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     [tbl, drug, a.arm,
                      str(meta.get("cryptic_version", "")) or None,
                      str(meta.get("mart_version", "")) or None,
                      str(cat) if cat else None,
-                     nrow, len(cols), nfeat, nR, nS])
+                     nrow, len(cols), nfeat, nR, nS, fe_v, fe_i, m_i])
         print(f"  {tbl}: {nrow:,} rows x {len(cols):,} cols ({nfeat:,} features) "
               f"[cryptic {meta.get('cryptic_version', '?')}]")
 

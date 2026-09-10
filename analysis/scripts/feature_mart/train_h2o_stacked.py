@@ -72,7 +72,7 @@ import pandas as pd
 # Local, and deliberately importable without mlflow installed: the module
 # degrades to no-ops so the untracked and tracked code paths cannot diverge.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from analysis.scripts.feature_mart import mlflow_tracking
+from analysis.scripts.feature_mart import fe_identity, mlflow_tracking
 
 RANDOM_STATE = 42
 FOLD_COL = "__fold__"
@@ -454,6 +454,22 @@ def train_one(df, drug, feature_set, features, out_dir, automl_secs, sort_metric
     return manifest
 
 
+def _embed_fe(out_dir: Path, fe: dict, drug: str, feature_set: str) -> None:
+    """Write mtb/fe_manifest.json INSIDE every MOJO in out_dir.
+
+    A MOJO is a zip, and H2O's loader ignores entries it does not know: on
+    3.46.0.7 a MOJO carrying this file loads and predicts bit-identically to the
+    original. The manifest therefore travels with the model file itself and is
+    readable with a plain unzip, no H2O needed. Re-check on an H2O upgrade.
+    """
+    import zipfile
+    body = json.dumps({"drug": drug, "feature_set": feature_set, **fe}, indent=2)
+    for z in sorted(out_dir.glob("*.zip")):
+        with zipfile.ZipFile(z, "a") as zf:
+            if "mtb/fe_manifest.json" not in zf.namelist():
+                zf.writestr("mtb/fe_manifest.json", body)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Three-layer H2O modeling (AutoML -> base models -> stacked ensembles).")
     p.add_argument("--mart", type=Path, required=True)
@@ -471,6 +487,12 @@ def main() -> None:
     p.add_argument("--balance-classes", action="store_true",
                    help="enable for the ~1-5%%R drugs (BDQ/LZD/DLM/CFZ); off for RIF/INH.")
     p.add_argument("--h2o-mem", default="6G")
+    p.add_argument("--mart-meta", type=Path, default=None,
+                   help="the mart's metadata sidecar (default: beside --mart)")
+    p.add_argument("--selection", type=Path, default=None,
+                   help="the selection manifest that chose the concordant features")
+    p.add_argument("--fe-pre-steps", default="", help="label-free FE steps that ran")
+    p.add_argument("--fe-fold-steps", default="", help="label-using FE steps that ran")
     p.add_argument("--held-out-lineage", default=None,
                    help="train without this lineage and score every candidate on "
                         "it. Turns the run into the EVALUATION arm: comparable to "
@@ -485,6 +507,24 @@ def main() -> None:
     drug = args.drug or _infer_drug(args.mart)
     df = pd.read_parquet(args.mart)
     concordant = _load_concordant(args.concordance)
+
+    # The FE identity of the features these models are trained on. Computed once
+    # and carried into the manifest, the MLflow tags, and INSIDE every MOJO, so a
+    # model file separated from everything else still says what FE made it. A
+    # mart that predates the recorded FE block yields no identity; training goes
+    # ahead and the manifest says the identity is unknown rather than guessing.
+    fe = None
+    meta_path = args.mart_meta or args.mart.with_suffix(".metadata.json")
+    try:
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        sel = json.loads(args.selection.read_text()) if args.selection and args.selection.exists() else {}
+        fe = fe_identity.identity(meta, sel, args.fe_pre_steps, args.fe_fold_steps)
+        fe["mart_id"] = fe_identity.mart_id(
+            fe["fe_id"], (meta.get("source_db") or {}).get("checksum_sha256"))
+        fe["cryptic_version"] = meta.get("cryptic_version")
+        print(f"FE {fe['fe_version']} ({fe['fe_id']}), {fe['mart_id']}")
+    except SystemExit as exc:
+        print(f"no FE identity for this mart: {exc}")
 
     # Hold a whole lineage out, or refit on everything. 'none' is accepted so the
     # workflow can pass the fold value straight through without a conditional.
@@ -514,7 +554,8 @@ def main() -> None:
         # unreachable, so an hour of cluster time is never lost to a tracking
         # failure.
         out_dir = args.out / fs
-        with mlflow_tracking.run(drug, fs, {
+        fe_tags = {k: fe[k] for k in ("fe_version", "fe_id", "mart_id", "cryptic_version")} if fe else {}
+        with mlflow_tracking.run(drug, fs, tags=fe_tags, params={
                 "n_features": len(feats),
                 "automl_secs": args.automl_secs,
                 "sort_metric": args.sort_metric,
@@ -528,6 +569,12 @@ def main() -> None:
             results[fs] = train_one(df, drug, fs, feats, out_dir,
                                     args.automl_secs, args.sort_metric, args.balance_classes,
                                     holdout_df=holdout_df)
+            # Before anything is logged or checksummed: the MOJO a tracking
+            # server or a deposit receives is the one that carries its FE.
+            results[fs]["fe"] = fe
+            (out_dir / "manifest.json").write_text(json.dumps(results[fs], indent=2))
+            if fe:
+                _embed_fe(out_dir, fe, drug, fs)
             mlflow_tracking.log_manifest(tracked, results[fs], out_dir)
 
     h2o.cluster().shutdown()

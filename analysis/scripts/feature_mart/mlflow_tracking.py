@@ -42,7 +42,7 @@ def enabled() -> bool:
 
 
 @contextlib.contextmanager
-def run(drug: str, feature_set: str, params: dict[str, Any]):
+def run(drug: str, feature_set: str, params: dict[str, Any], tags: dict[str, Any] | None = None):
     """A parent run for one (drug, feature set), or a no-op if tracking is off.
 
     Yields a handle whose methods are safe to call unconditionally: when
@@ -80,6 +80,9 @@ def run(drug: str, feature_set: str, params: dict[str, Any]):
             "nomad_alloc": os.environ.get("NOMAD_ALLOC_ID", ""),
             "container_tag": os.environ.get("MTB_CONTAINER_TAG", ""),
             "git_revision": os.environ.get("MTB_GIT_REVISION", ""),
+            # Caller provenance -- the FE identity above all: two runs with equal
+            # metrics and different fe_id are not the same experiment.
+            **(tags or {}),
         })
         yield handle
         handle.status("FINISHED")

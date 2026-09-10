@@ -48,6 +48,11 @@ from pathlib import Path
 
 import duckdb
 
+try:
+    from analysis.scripts.feature_mart import fe_identity
+except ImportError:  # run as a plain script from this directory
+    import fe_identity
+
 
 CATALOGUE_NAME = "WHO-UCN-GTB-PCI-2023.5"
 TOP_N_MUTATIONS = 1000
@@ -670,6 +675,22 @@ def build_mart(
     n_S = len(y_bin) - n_R
 
     meta = {
+        # The FE version and settings, recorded by the stage that applies them.
+        # `mart_version` below is NOT the FE version: it is the scope label the
+        # filename carries (every real run passes "vFULL" so downstream globs
+        # find the file), and it overwrote the only FE version this project had.
+        # fe_identity.identity() assembles fe_id from this block.
+        "fe_version": fe_identity.FE_VERSION,
+        "fe": fe_identity.producer_block("mart", {
+            "mutation_selector": mutation_selector,
+            "top_n_mutations": top_n,
+            "max_carrier_frac": max_carrier_frac,
+            "min_carrier_count": min_carrier_count,
+            "gene_level_flags": gene_level_flags,
+            "fold_strategy": fold_strategy,
+            "n_folds": n_folds,
+            "random_state": random_state,
+        }, {"determinant_genes": {k: sorted(v) for k, v in sorted(DETERMINANT_GENES.items())}}),
         "mart_version": mart_version,
         "drug": drug,
         "cryptic_version": cryptic_version,

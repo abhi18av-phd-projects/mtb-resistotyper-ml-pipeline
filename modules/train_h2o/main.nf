@@ -23,6 +23,13 @@ process TRAIN_H2O {
 
     script:
     def heap = "${(task.memory.toGiga() * 0.8) as int}G"
+    // The FE identity inputs: the mart's sidecar, the selection manifest, and the
+    // FE steps that ran. Only the stacked entrypoint understands them; the older
+    // single-AutoML script is passed nothing new rather than an argument it
+    // would reject.
+    def fe_args = params.h2o_entrypoint == 'train_h2o_stacked'
+        ? "--mart-meta \$OLDPWD/${meta} --selection \$OLDPWD/${selection} --fe-pre-steps '${params.fe_pre_steps ?: ''}' --fe-fold-steps '${params.fe_fold_steps ?: ''}'"
+        : ''
     """
     export JAVA_HOME=${params.java_home}
     export PATH=\$JAVA_HOME/bin:\$PATH
@@ -53,6 +60,7 @@ process TRAIN_H2O {
         ${params.h2o_balance_classes ? '--balance-classes' : ''} \\
         --h2o-mem ${heap} \\
         ${held_out == 'none' ? '' : "--held-out-lineage ${held_out}"} \\
+        ${fe_args} \\
         --out \$OLDPWD/h2o/
 
     cd \$OLDPWD

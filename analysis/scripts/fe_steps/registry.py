@@ -31,6 +31,10 @@ class Step:
     label_free: bool
     summary: str
     run: Callable
+    # Per-step version. A step's own behaviour can change without the rest of
+    # FE changing; the version is what fe_config records for each step that ran,
+    # so two runs that used "the same step" can be told apart when they did not.
+    version: str = "1.0.0"
 
     @property
     def phase(self) -> str:

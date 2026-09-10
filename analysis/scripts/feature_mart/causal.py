@@ -551,6 +551,14 @@ def run_r1_experiment(
     manifest["held_out_lineage"] = held_out_lineage
     manifest["n_rows_used"] = int(len(df))
     manifest["n_rows_total"] = int(n_all)
+    # The FE identity of this stage, recorded by the stage itself: its settings,
+    # the FE version it implements and a hash of this file. Downstream consumers
+    # assemble fe_id from what producers record rather than from code they may
+    # not share. The realised candidate-pool size is data, not configuration,
+    # and stays out of it.
+    from analysis.scripts.feature_mart import fe_identity
+    manifest["fe"] = fe_identity.producer_block(
+        "selection", {k: manifest.get(k) for k in fe_identity.SELECTION_SETTINGS})
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest
 

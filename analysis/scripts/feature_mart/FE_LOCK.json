@@ -1,0 +1,15 @@
+{
+  "fe_version": "1.0.3",
+  "code_sha256": {
+    "feature_mart/build_mart.py": "b535aa1edc1f857a824f2cf8ce530acddf98a441b53173791b6c5711219823db",
+    "feature_mart/causal.py": "a31ca874f17a998aa7de5828e62d995da4aa56fed1ae694233a7ae1107786c2c",
+    "fe_steps/callability_filter.py": "1c92096adcd35779a5edc3b39cbbe5749c1476dae7a7ecd571967f8865cc7dac",
+    "fe_steps/class_filter.py": "6b7817b37e4579fb7fb1b8f7ae7c3f870626c58cff62fb6ded96d49859416310",
+    "fe_steps/rank_association.py": "88c36accd79e7cb6b120a644f524bf6a3529efb772f85e56685ba31ed62d3370",
+    "fe_steps/rank_mic.py": "5fd85a0048b6a61fbfe6bab4dba8dc7a13fddd274d37d97f20df02e6866610ef",
+    "fe_steps/region_filter.py": "8e3fc2503011187e9da535a1ed6690fa01d07fddbac310e06b844861aa659fa2",
+    "fe_steps/registry.py": "03af8c79420ea4ed81a6d2c9dc6fe689d1009aed135d5a216988d71473ac90a4",
+    "fe_steps/run_step.py": "d16abfc1a51c7789d504583ab7bcde09da4dfc70e21867e5abd6efd65e0646b1",
+    "fe_steps/select_cross_model.py": "b5877651053736aa14b02b3713e7498414b27fe9b76a6c294ca3689070bf5f46"
+  }
+}
