@@ -1,0 +1,90 @@
+%%metro title: mtb-resistotyper-ml pipeline
+%%metro style: light
+%%metro line_order: definition
+%%metro caption: Stations run once per drug; per-fold stations run once per held-out lineage (4 folds). Open markers are optional steps.
+%%metro line: eval      | Evaluation arm: selection and scoring inside each held-out-lineage fold | #2db572
+%%metro line: deploy    | Deployment arm: selection refit on all data                        | #0570b0
+%%metro line: deposit   | Continue from a deposit (--from_duckdb)                            | #8e44ad | dashed
+%%metro line: catalogue | Build a catalogue (--build_catalogue)                              | #e67e22
+%%metro files: cryptic_in  | Parquet | CRyPTIC tables
+%%metro file: db_in        | DuckDB  | Existing database (--db)
+%%metro file: deposit_in   | DuckDB  | Published deposit
+%%metro file: reference_in | CSV     | Reference catalogue
+%%metro file: deposit_out  | DuckDB  | Deposit
+%%metro dir: h2o_out       | H2O models
+%%metro dir: eval_out      | Tier reports
+%%metro file: catalogue_out | CSV    | Catalogue
+%%metro marker: build_db  | circle, open
+%%metro marker: fe_pre    | circle, open
+%%metro marker: fe_fold   | circle, open
+%%metro marker: check_db  | square, solid
+%%metro marker_legend: circle, open  | Optional step (off by default)
+%%metro marker_legend: square, solid | Gate: nothing downstream starts until it passes
+%%metro legend: bottom
+
+graph LR
+    subgraph compendium [Compendium]
+        cryptic_in[CRyPTIC tables]
+        build_db([Build database])
+        db_in[Existing database]
+        check_db([Integrity gate])
+    end
+
+    subgraph features [Features]
+        build_cohort([Build cohort])
+        build_mart([Feature mart])
+        fe_pre([Label-free FE])
+        _arms
+        fe_fold([Label-using FE, in fold])
+        select_fold([Concordance, in fold])
+        select_full([Concordance, all data])
+        deposit_out[Deposit]
+    end
+
+    subgraph modelling [Training and evaluation]
+        deposit_in[Published deposit]
+        unpack([Unpack deposit])
+        evaluate([Score held-out lineage])
+        train_fold([Train, in fold])
+        tiers([Tier report])
+        eval_out[Tier reports]
+        train_full([Train, all data])
+        h2o_out[H2O models]
+    end
+
+    subgraph catalogue [Catalogue]
+        extract([Extract cohort])
+        catomatic([catomatic])
+        reference_in[Reference catalogue]
+        compare([Compare to reference])
+        catalogue_out[Catalogue]
+    end
+
+    cryptic_in -->|eval,deploy,catalogue| build_db
+    build_db -->|eval,deploy,catalogue| check_db
+    db_in -->|eval,deploy,catalogue| check_db
+    check_db -->|eval,deploy| build_cohort
+    build_cohort -->|eval,deploy| build_mart
+    build_mart -->|eval,deploy| fe_pre
+    fe_pre -->|eval,deploy| _arms
+    _arms -->|eval| fe_fold
+    fe_fold -->|eval| select_fold
+    _arms -->|deploy| select_full
+    select_fold -->|eval| deposit_out
+    select_full -->|deploy| deposit_out
+    select_fold -->|eval| evaluate
+    select_fold -->|eval| train_fold
+    evaluate -->|eval,deposit| tiers
+    tiers -->|eval,deposit| eval_out
+    select_full -->|deploy| train_full
+    train_full -->|deploy,deposit| h2o_out
+    train_fold -->|eval,deposit| h2o_out
+    deposit_in -->|deposit| unpack
+    unpack -->|deposit| evaluate
+    unpack -->|deposit| train_fold
+    unpack -->|deposit| train_full
+    check_db -->|catalogue| extract
+    extract -->|catalogue| catomatic
+    catomatic -->|catalogue| compare
+    reference_in -->|catalogue| compare
+    catomatic -->|catalogue| catalogue_out

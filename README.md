@@ -34,6 +34,11 @@ legible and stops the workflow failing on an unassigned channel.
 Each branch is documented below: training in the sections that follow, the deposit under
 **The publishable artefact**, the catalogue under **Building a mutations catalogue**.
 
+![The pipeline as a metro map: the evaluation and deployment arms, re-entry from a deposit, and the catalogue build](docs/images/metro_map.svg)
+
+The map is derived from the workflow's own DAG, one stub run per branch; see
+`docs/images/README.md` to regenerate it after changing the wiring.
+
 ### Testing the flow without running the work
 
 Every process defines a stub, so any of the three branches can be exercised end to end in
@@ -198,7 +203,9 @@ comparison between them is a run rather than a rewrite.
 **FRS is mostly null, so FRS filtering is off.** The column is populated for 10.19% of mutation
 rows in the v3.4.0 build and 0.33% in v2.1.2. `FRS >= 0.9` takes rpoB from 78,542 rows to 60 and
 still returns a catalogue. `--catalogue_frs` is `null` by default and the extraction refuses a
-threshold below 50% coverage unless `--allow-sparse-frs` is passed.
+threshold below 50% coverage unless `--allow-sparse-frs` is passed. catomatic has its own
+`--frs`; the filtering is done at extraction instead because only there can the run report how
+much of the data carried an FRS value at all.
 
 **Restrict the genes.** Unrestricted, a build grades all 1,801 genes the cohort carries,
 including the PE/PPE families no catalogue entry mentions. `--catalogue_genes` defaults to the
