@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "mtb-resistotyper-ml-pipeline: feature engineering and model training for M. tuberculosis drug-resistance prediction"
+abstract: >-
+  Nextflow pipeline that assembles the CRyPTIC compendium into a checksummed
+  DuckDB database, builds per-drug feature marts under versioned feature
+  engineering, selects features by causal concordance inside each
+  held-out-lineage fold, and trains H2O AutoML models. It can also resume
+  training from a deposited database, and build resistance catalogues with
+  catomatic.
+authors:
+  - family-names: Sharma
+    given-names: Abhinav
+    orcid: "https://orcid.org/0000-0002-6402-6993"
+repository-code: "https://github.com/abhi18av-phd-projects/mtb-resistotyper-ml-pipeline"
+license: EPL-2.0
+type: software
+version: 0.2.1
+date-released: 2026-09-11
+keywords:
+  - antimicrobial resistance
+  - tuberculosis
+  - machine learning
+  - Nextflow
+  - feature engineering
+  - lineage-aware evaluation
