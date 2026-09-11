@@ -1,8 +1,8 @@
 {
-  "fe_version": "1.0.3",
+  "fe_version": "1.0.4",
   "code_sha256": {
     "feature_mart/build_mart.py": "b535aa1edc1f857a824f2cf8ce530acddf98a441b53173791b6c5711219823db",
-    "feature_mart/causal.py": "a31ca874f17a998aa7de5828e62d995da4aa56fed1ae694233a7ae1107786c2c",
+    "feature_mart/causal.py": "417abfbe3c099eed6c003548c7bbc621ebd724edcc86f9aaf4679bce29aa8377",
     "fe_steps/callability_filter.py": "1c92096adcd35779a5edc3b39cbbe5749c1476dae7a7ecd571967f8865cc7dac",
     "fe_steps/class_filter.py": "6b7817b37e4579fb7fb1b8f7ae7c3f870626c58cff62fb6ded96d49859416310",
     "fe_steps/rank_association.py": "88c36accd79e7cb6b120a644f524bf6a3529efb772f85e56685ba31ed62d3370",

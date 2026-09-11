@@ -46,7 +46,7 @@ import json
 import sys
 from pathlib import Path
 
-FE_VERSION = "1.0.3"
+FE_VERSION = "1.0.4"
 
 HERE = Path(__file__).resolve().parent               # analysis/scripts/feature_mart
 SCRIPTS = HERE.parent                                 # analysis/scripts
