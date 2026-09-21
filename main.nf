@@ -220,14 +220,19 @@ workflow {
                               file(u.mart), file(u.meta),
                               file(u.concordance), file(u.selection)) }
 
-        // The deposit holds BOTH arms, and they are not interchangeable. Units
-        // with a held-out lineage carry a selection made inside that training
-        // fold and are the only honest input to evaluation; the `none` unit
-        // carries a selection refit on all data and is the only legitimate
-        // input to a shipped model. Feeding either arm to the other stage --
-        // which the first version of this branch did -- silently produces
-        // deployment models fitted on fold-restricted features and a "fold"
-        // score computed on rows its features already saw.
+        // A deposit may hold either arm or both, and they are not
+        // interchangeable. Units with a held-out lineage carry a selection made
+        // inside that training fold and are the only honest input to
+        // evaluation; a `none` unit carries a selection refit on all data and
+        // is the only legitimate input to a shipped model. Feeding either arm
+        // to the other stage -- which the first version of this branch did --
+        // silently produces deployment models fitted on fold-restricted
+        // features and a "fold" score computed on rows its features already
+        // saw. Routing by arm rather than asserting both are present is what
+        // lets a single-arm deposit run: the published feature-mart record
+        // (10.5281/zenodo.22874801) carries the deployment arm alone, so its
+        // eight units all take the deployment path and the evaluation stages
+        // are correctly left with nothing to do.
         ch_by_arm  = ch_units.branch { _d, _fe, held_out, _m, _mt, _c, _s ->
             deployment: held_out == 'none'
             evaluation: true

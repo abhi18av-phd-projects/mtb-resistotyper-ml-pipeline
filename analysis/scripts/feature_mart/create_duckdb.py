@@ -47,20 +47,65 @@ def _q(v) -> str:
     return "NULL" if v is None else "'" + str(v).replace("'", "''") + "'"
 
 
-def _unit_of(p) -> tuple[str, str]:
-    """(drug, fold) from `concordance_<DRUG>_<fold>.parquet` / `selection_<DRUG>_<fold>.json`.
+# The candidate level a campaign selected at, as it appears in that campaign's
+# own filenames. These are levels, not folds: a name ending in one of them says
+# what the rows ARE, and leaves the fold to the manifest beside it.
+CANDIDATE_LEVELS = ("mutation_level", "gene_level", "variant_level")
+# A view of a selection rather than the selection itself, e.g. the catalogue
+# benchmark, which is the same rows plus a verdict column.
+LEVEL_VIEWS = ("_vs_catalogue",)
 
-    Both come from the filename. Naming by fold alone was unique for one drug and
-    collided for two: CREATE_DUCKDB collects every drug's selections into one
-    task, so RIF and INH each staged a `concordance_lineage1.parquet`. Neither a
-    drug code (RIF, BDQ) nor a fold (lineage1..lineage4, none) contains an
-    underscore, so the LAST underscore separates them.
+
+def _unit_of(p) -> tuple[str, str]:
+    """(drug, fold) from a selection parquet or its manifest, by filename.
+
+    Two naming schemes are in use, because the per-fold arm and the
+    refit-on-all arm were built by different campaigns.
+
+    Per-fold (`concordance_<DRUG>_<fold>.parquet`,
+    `selection_<DRUG>_<fold>.json`): both keys come from the filename. Naming by
+    fold alone was unique for one drug and collided for two -- CREATE_DUCKDB
+    collects every drug's selections into one task, so RIF and INH each staged a
+    `concordance_lineage1.parquet`. Neither a drug code (RIF, BDQ) nor a fold
+    (lineage1..lineage4, none) contains an underscore, so the LAST underscore
+    separates them.
+
+    Refit-on-all (`causal_concordance_<DRUG>_<level>.parquet`, beside a
+    per-drug `manifest.json`): the trailing token is the CANDIDATE LEVEL, not a
+    fold, and it does contain an underscore. Splitting on the last underscore
+    would read "level" as the fold and `<DRUG>_mutation` as the drug, which
+    silently mislabels every row. So the level is stripped by name and the fold
+    returned empty, leaving the manifest's `held_out_lineage` -- null for this
+    arm, hence "none" -- to supply it. That is the honest key: these selections
+    were fitted on the whole cohort, and the deposit must say so rather than
+    invent a fold.
+
+    A manifest named `manifest.json` carries its drug in its parent directory
+    (`causal/<DRUG>/manifest.json`), which is the only place it appears.
 
     A legacy fold-only name (`concordance_lineage1`) yields drug "" so the
     caller can fall back to the manifest; an unrecognised name yields ("", ""),
     so an unknown fold is never mistaken for the refit-on-all arm.
     """
-    stem = Path(p).stem
+    path = Path(p)
+    stem = path.stem
+
+    # `causal/<DRUG>/manifest.json` -- the drug is the directory.
+    if path.name == "manifest.json":
+        return path.parent.name, ""
+
+    if stem.startswith("causal_concordance_"):
+        rest = stem[len("causal_concordance_"):]
+        for view in LEVEL_VIEWS:
+            if rest.endswith(view):
+                rest = rest[: -len(view)]
+        for level in CANDIDATE_LEVELS:
+            if rest.endswith("_" + level):
+                return rest[: -len(level) - 1], ""
+        # An unrecognised level: the drug is still the leading token, and the
+        # fold still belongs to the manifest.
+        return rest.split("_", 1)[0], ""
+
     for prefix in ("concordance_", "selection_"):
         if stem.startswith(prefix):
             rest = stem[len(prefix):]
@@ -69,6 +114,26 @@ def _unit_of(p) -> tuple[str, str]:
                 return drug, fold
             return "", rest
     return "", ""
+
+
+def _drug_of_mart(p) -> str:
+    """DRUG from a mart parquet's filename, whichever scheme named it.
+
+    `feature_mart_<DRUG>.parquet` was the original shape. A campaign that
+    builds the same drug on several compendium releases has to say which, so
+    the marts arrive as `feature_mart_<DRUG>_cryptic-<release>_v<MART>.parquet`
+    instead. Stripping only the prefix then yields "AMI_cryptic-v2.1.2_vFULL"
+    as the drug, which is not a drug: it does not match the `selections.drug`
+    parsed from the concordance filenames, so the one join a reader needs
+    between a mart and the features chosen for it silently returns nothing.
+    Both facts are already columns of marts_index, so drop them from the key.
+    """
+    stem = Path(p).stem
+    if stem.startswith("feature_mart_"):
+        stem = stem[len("feature_mart_"):]
+    # `_cryptic-<release>` onwards is release and mart version, not drug.
+    head = stem.split("_cryptic-", 1)[0]
+    return head
 
 
 def _read_meta(p: Path) -> dict:
@@ -128,7 +193,7 @@ def main() -> int:
         if not mp.exists() or mp.stat().st_size == 0:
             print(f"  skip (missing): {mp}")
             continue
-        drug = mp.stem.replace("feature_mart_", "")
+        drug = _drug_of_mart(mp)
         tbl = _ident("mart", drug, a.arm)
         con.execute(f'CREATE TABLE "{tbl}" AS SELECT * FROM read_parquet(?)', [str(mp)])
         cols = [r[1] for r in con.execute(f'PRAGMA table_info("{tbl}")').fetchall()]
