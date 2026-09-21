@@ -94,6 +94,23 @@ resolve (a steep drop to a ~0.46 lineage-marker cluster below the top 2).
 
 from __future__ import annotations
 
+# Pinned before numpy/scipy are imported: OpenBLAS/MKL read these at first use,
+# and a multi-threaded BLAS call inside CausalForestDML's first-stage
+# nuisance-model fit (GridSearchCV choosing between 'forest' and 'linear') can
+# return a fractionally different cross-validated score on different host CPU
+# counts. Every voter here is seeded (RANDOM_STATE below), including the
+# per-tree random state and the subsample indices the forest draws -- both are
+# generated sequentially before any parallel work starts, and matched exactly
+# across an 8-CPU and a 2-CPU run. What did not match was the CATE point
+# estimate and CI, by whole units, which only a flip of the WINNING nuisance
+# model family explains: a near-tied CV score deciding between two
+# structurally different models is not itself seeded, and BLAS thread count
+# is the one remaining place floating-point order could move that score.
+import os
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 import argparse
 import json
 import time
@@ -277,7 +294,11 @@ def _fit_ebm_importance(df: pd.DataFrame, candidates: list[str]) -> dict[str, fl
     X = pd.concat([df[candidates], _confounder_matrix(df)], axis=1)
     y = df["y__binary"].to_numpy()
 
-    ebm = ExplainableBoostingClassifier(interactions=0, random_state=RANDOM_STATE)
+    # n_jobs=1: the bag-fitting parallelism defaults to n_jobs=-2 (all cores
+    # but one), which was not shown to move this vote in testing but is pinned
+    # anyway -- the point of RANDOM_STATE is that nothing here depends on how
+    # many workers happened to run it.
+    ebm = ExplainableBoostingClassifier(interactions=0, random_state=RANDOM_STATE, n_jobs=1)
     ebm.fit(X, y)
 
     importances = dict(zip(ebm.term_names_, ebm.term_importances()))
@@ -319,10 +340,20 @@ def _cate_significant(df: pd.DataFrame, candidate_col: str,
     # econml requires n_estimators divisible by subforest_size (default 4);
     # round to the nearest multiple of 4 so any --cate-estimators works.
     n_est = max(4, round(n_estimators / 4) * 4)
+    # n_jobs=1: the default (-1, all cores) fits trees in parallel across
+    # workers. The per-tree random state and subsample indices are generated
+    # sequentially before that parallel work starts (econml does this
+    # deliberately, for speed, not for reproducibility), so tree assignment is
+    # not the risk. The risk is upstream, in model_y='auto'/model_t='auto':
+    # GridSearchCV picks between 'forest' and 'linear' by cross-validated
+    # score, and a near-tied score can land on either side of a threading-
+    # dependent floating-point difference. n_jobs also gates that fit, so
+    # pinning it here closes both.
     est = CausalForestDML(
         n_estimators=n_est,
         random_state=RANDOM_STATE,
         discrete_treatment=True,
+        n_jobs=1,
     )
     est.fit(Y, T, X=X)
     ate = float(est.ate(X))
