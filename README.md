@@ -14,6 +14,11 @@ nextflow run . -params-file experiments/baseline.yml
 nextflow run . --build_catalogue true --db /path/to/cryptic.duckdb
 ```
 
+**New here, and your remit is the features or the models?** Start at
+[`docs/collaborator-guide.md`](docs/collaborator-guide.md) — what to ask for access to, the
+fastest run that proves the setup, how to change FE and training without touching the
+workflow, and the technique backlog.
+
 ## Three ways in
 
 The entry workflow has three top-level branches, and a run takes exactly one of them. They are
