@@ -1,22 +1,80 @@
 # Submitting this pipeline to the abc cluster
 
 Operating instructions for a collaborator and, specifically, for **an agent working on the
-collaborator's behalf**. It assumes you hold your own cluster credentials and have never
-submitted a job here.
+collaborator's behalf**. It starts from nothing installed and assumes you have been handed
+your own cluster credentials but have never submitted a job here.
 
 Read [`collaborator-guide.md`](collaborator-guide.md) first if you have not: it covers what the
-pipeline computes and how to change it. This document covers only how to get a run onto the
-cluster, how to iterate without paying for a full campaign each time, and which parameters are
-worth varying.
+pipeline computes and how to change it. This document covers installing and configuring the
+CLI, proving the cluster path works before trusting it, getting a run submitted, iterating
+without paying for a full campaign each time, and which parameters are worth varying.
 
-> **For an agent.** §9 is a hard-rules list. Read it before running anything. Two of its rules
+**§§1–4 are done once.** §§5–11 are the working loop.
+
+> **For an agent.** §11 is a hard-rules list. Read it before running anything. Two of its rules
 > exist because they have already been broken in this project: a command that prints a live
 > credential into a transcript burns that credential, and switching the shared CLI context
 > yanks it out from under every other session on the machine.
 
 ---
 
-## 1. What you need handed to you
+## 1. Install and configure the CLI
+
+### Install
+
+The CLI repository is **public**, so this needs no credential:
+
+```bash
+# into the current directory
+curl -fsSL -H "Accept: application/vnd.github.raw+json" \
+  "https://api.github.com/repos/abc-cluster/abc-cluster-cli/contents/scripts/install-abc.sh?ref=main" | sh
+
+# or straight to /usr/local/bin/abc
+curl -fsSL -H "Accept: application/vnd.github.raw+json" \
+  "https://api.github.com/repos/abc-cluster/abc-cluster-cli/contents/scripts/install-abc.sh?ref=main" | sh -s -- --sudo
+```
+
+The installer is fetched through the GitHub **Contents API** rather than
+`raw.githubusercontent.com` on purpose: `ref=main` on the CDN can serve an outdated snapshot.
+
+```bash
+abc version          # expect v0.1.82 or newer
+abc self-update      # in place, thereafter
+```
+
+**Require v0.1.82 or newer.** Releases before it have two defects that bite this pipeline
+directly: `abc data fetch` uploaded with the wrong credentials, and the pipeline head ran with
+a memory default low enough to be OOM-killed into a restart loop that reported itself as
+something else. Both were fixed on 2026-10-31.
+
+**Never hand-roll a binary.** Install from a release or `abc self-update`; do not cross-compile
+one into `/tmp` and copy it around. A forked toolchain makes it impossible to say afterwards
+which CLI submitted a run.
+
+For the local rungs of §7 you also need **Nextflow** (the pipeline manifest requires ≥ 24.10.0;
+the pinned nf-nomad plugin releases require ≥ 26.04.3), a **JDK**, and **Docker**. A cluster run
+needs none of them locally — the head job carries its own Nextflow and the work runs in
+containers.
+
+### Initialise local config
+
+```bash
+abc config init      # creates ~/.abc/config.yaml with a placeholder "default" context
+abc config list      # every key, with the active context marked
+abc config get <key>
+```
+
+Three things worth knowing about the local state:
+
+- **`~/.abc/config.yaml`** holds every context, including access tokens. It is a secret file.
+  Do not cat it, copy it into a chat, or commit it.
+- **`~/.abc/db/local.db`** is a local SQLite holding run and data records; `abc report` reads it.
+  Inspect with `abc localdb`.
+- **Every `abc` invocation is audited locally** — timestamp, context, verb, redacted argv, exit
+  code, duration. `ABC_NO_AUDIT=1` disables it. This is local bookkeeping, not surveillance, and
+  it is what lets you reconstruct what you ran last week.
+
+## 2. What you need handed to you
 
 Eight values. None of them can be derived, and the last two are secrets.
 
@@ -27,7 +85,7 @@ Eight values. None of them can be derived, and the last two are secrets.
 | 3 | group bucket | `su-mbhg-bioinformatics` | no |
 | 4 | Nomad namespace | `su-mbhg-bioinformatics` | no |
 | 5 | head node pool | `platform` | no |
-| 6 | worker node pool | `platform` — **not `compute`**; see §7 | no |
+| 6 | worker node pool | `platform` — **not `compute`**; see §9 | no |
 | 7 | internal S3 endpoint | `http://<internal-ip>:9000` — the API port `:9000`, never the console `:9001` | no |
 | 8 | API access token · MinIO access key + secret | — | **yes** |
 
@@ -39,12 +97,12 @@ object storage *directly* — `mc`, the AWS CLI, DuckDB's httpfs extension, a no
 parquet file. **A cluster run does not need them in your environment.** `abc pipeline run`
 injects `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and a scoped `NOMAD_TOKEN` into the head
 job itself, from your identity on the server side. If you find yourself exporting AWS keys to
-make a submission work, something else is wrong — check §7 before adding credentials to the
+make a submission work, something else is wrong — check §9 before adding credentials to the
 problem.
 
 ---
 
-## 2. One-time setup
+## 3. One-time setup
 
 ```bash
 abc auth context add seedling-ana \
@@ -79,14 +137,14 @@ ABC_CLI_CONTEXT=seedling-ana abc data list                 # should show your gr
 
 If `abc data list` shows no bucket, or a run later says *"your user has no group bucket (group:
 none)"*, you are not a member of the group. That is an account state only an administrator can
-change — ask, and until then pass `--work-dir` explicitly as §4 does.
+change — ask, and until then pass `--work-dir` explicitly as §6 does.
 
 ### `site.env`
 
 ```bash
 cd mtb-resistotyper-ml-pipeline
 cp site.env.example site.env
-$EDITOR site.env          # fill in values 1 and 3–7 from §1
+$EDITOR site.env          # fill in values 1 and 3–7 from §2
 ```
 
 `site.env` is gitignored. Everything in it describes *where* the pipeline runs; nothing in it
@@ -97,7 +155,108 @@ carry no hostnames or buckets and can be re-run anywhere.
 
 ---
 
-## 3. The workbench
+## 4. Prove it works before touching the pipeline
+
+Four checks, escalating. Run them in order, the first time and after any change to credentials,
+context or CLI version. Each one isolates a different layer, so the first failure tells you
+where to look. **Do not skip to §6 with any of them failing** — every symptom in §9 is cheaper
+to diagnose here than inside a twelve-hour run.
+
+### 4.1 — The CLI can reach the cluster
+
+```bash
+abc doctor --context seedling-ana
+```
+
+`--context` runs the checks against a named context **without switching the active one**, which
+is the whole reason to prefer it. Three groups run in order: config loads and has an address and
+token; Nomad is reachable and healthy, and MinIO is probed when an S3 endpoint is configured; and
+a minimal `raw_exec` batch job is submitted as a probe, waited on for up to 60 s, then purged.
+Exit 0 means all three passed.
+
+```bash
+abc doctor --context seedling-ana --skip-job     # groups 1 and 2 only, if the cluster is busy
+abc doctor --context seedling-ana --json         # machine-readable
+abc doctor --context seedling-ana --bundle       # a REDACTED support bundle, safe to share
+```
+
+`--bundle` is the one diagnostic output here that is deliberately redacted and therefore safe to
+send to someone. Prefer it over pasting raw command output when asking for help.
+
+### 4.2 — Storage works, both directions
+
+There is no storage flag on the verification job; prove it with a round-trip instead.
+
+```bash
+C=seedling-ana
+ABC_CLI_CONTEXT=$C abc data list                              # your buckets
+echo "hello $(date -u +%FT%TZ)" > /tmp/abc-probe.txt
+ABC_CLI_CONTEXT=$C abc data push /tmp/abc-probe.txt \
+    s3://<group-bucket>/users/<you>/abc-probe.txt
+ABC_CLI_CONTEXT=$C abc data stat s3://<group-bucket>/users/<you>/abc-probe.txt
+ABC_CLI_CONTEXT=$C abc data pull s3://<group-bucket>/users/<you>/abc-probe.txt /tmp/back.txt
+diff /tmp/abc-probe.txt /tmp/back.txt && echo "round-trip ok"
+ABC_CLI_CONTEXT=$C abc data delete s3://<group-bucket>/users/<you>/abc-probe.txt
+```
+
+`delete` is recoverable — it moves the object to the group's `trash/`. `remove` and `purge` are
+not; do not reach for either during a check.
+
+If `abc data list` shows nothing, see the group-membership note in §3.
+
+### 4.3 — The cluster will run a job for you: `hello-cluster`
+
+```bash
+ABC_CLI_CONTEXT=seedling-ana abc job run hello-cluster \
+    --cores 1 --mem 512M --node-pool platform --name probe-hello
+```
+
+`hello-cluster` is a **built-in verification workload** — a randomised `stress-ng` pass across
+CPU, memory and I/O. It is the canonical proof that the client→scheduler→node path works for
+your identity.
+
+**Pass `--cores 1 --mem 512M`.** It defaults to 4 cores, and on this deployment the only
+registered client in `platform` also runs eighteen of the platform's own services; a 4-core
+reservation can sit unplaced behind them. Pass `--node-pool platform` explicitly for the reason
+§6 gives — the context default may name a pool with no clients at all.
+
+```bash
+ABC_CLI_CONTEXT=seedling-ana abc job status probe-hello
+ABC_CLI_CONTEXT=seedling-ana abc job logs   probe-hello
+ABC_CLI_CONTEXT=seedling-ana abc job trace  probe-hello     # if it failed
+ABC_CLI_CONTEXT=seedling-ana abc job stop   probe-hello
+```
+
+Two fallbacks, in order, if it never starts:
+
+- `--sleep=120s` holds the allocation open before the work begins, so you can exec in and look
+  around rather than inferring from a job that has already gone.
+- `--driver docker` if the default `exec` driver hangs. Exec-driver hangs have been seen on this
+  fleet's nodes (a kernel/Landlock interaction); `raw_exec` and `docker` work. **Report it rather
+  than silently switching** — which driver works is cluster state worth knowing, not a
+  preference.
+
+### 4.4 — Nextflow works end to end: `nextflow-io/hello`
+
+The first check that exercises the actual pipeline path — plugin resolution, node pools, the S3
+work directory and the head job — on a workload that takes seconds instead of hours.
+
+```bash
+ABC_CLI_CONTEXT=seedling-ana abc pipeline run nextflow-io/hello \
+    --head-pool platform --worker-pool platform \
+    --work-dir s3://<group-bucket>/users/<you>/hello-workdir/ \
+    --name probe-nf-hello --wait --logs
+```
+
+`--work-dir` is explicit because auto-derivation needs group membership; if yours is in place you
+can drop it. Everything else is the minimum this deployment needs, and it is the same shape the
+pipeline's own launcher produces.
+
+When this prints four greetings, the path the real pipeline uses is proven. **That is the point
+at which §6 is safe.** If it fails, the failure is in the deployment and not in the pipeline —
+match it against §9 before changing anything in this repository.
+
+## 5. The workbench
 
 A code-server IDE on the cluster with your home directory bind-mounted, which survives
 disconnection.
@@ -119,11 +278,11 @@ recorded. `abc workbench connect` mints a token for VS Code or Positron and has 
 property.
 
 **Stop the session when you are done.** It holds cores and memory on a node that is also
-running the platform's own services, and §7's queue problem gets worse while it is up.
+running the platform's own services, and §9's queue problem gets worse while it is up.
 
 ---
 
-## 4. Submitting a run
+## 6. Submitting a run
 
 **Use the launcher. Not a bare `abc pipeline run`.**
 
@@ -159,7 +318,7 @@ scripts/launch.sh experiments/baseline.yml --dry-run 2>&1 \
 
 ---
 
-## 5. Iterating without paying for a campaign
+## 7. Iterating without paying for a campaign
 
 A full campaign is 11 drugs × 4 lineages of an EBM, a causal forest and a refutation pass, plus
 training: **on the order of twelve hours.** You will want to change something and run again.
@@ -256,7 +415,7 @@ The pipeline has three top-level entry branches, and a run takes exactly one:
 
 ---
 
-## 6. Parameters worth varying
+## 8. Parameters worth varying
 
 Set these in a committed `experiments/*.yml`, not on the command line, as soon as you care about
 the answer. `experiments/baseline.yml` is the file every other one copies; the comparability
@@ -305,7 +464,7 @@ producing a mart that looks fine and is not.
 
 | param | default | decides |
 |---|---|---|
-| `create_duckdb` | null | write the deposit — §5's checkpoint |
+| `create_duckdb` | null | write the deposit — §7's checkpoint |
 | `from_duckdb` | null | start from one |
 | `nomad_delete_on_completion` | true | **set false while debugging** — a completed worker job is deleted with its allocation, events and logs, so a failure deletes its own evidence |
 | `skip_db_check` | false | |
@@ -316,7 +475,7 @@ before touching them.
 
 ---
 
-## 7. What to expect, and what goes wrong
+## 9. What to expect, and what goes wrong
 
 **Submission is bounded to three concurrent tasks on purpose.** Left unbounded, Nextflow
 submitted five 6-CPU selections at once onto a node shared with eighteen of the platform's own
@@ -359,7 +518,7 @@ and say so if they are not.
 
 ---
 
-## 8. Where the output goes
+## 10. Where the output goes
 
 ```
 <outdir>/
@@ -382,7 +541,7 @@ directories are the honest evaluation. Do not average them with the first.
 
 ---
 
-## 9. Hard rules for an agent
+## 11. Hard rules for an agent
 
 1. **Never run a command that prints a live credential into your transcript or any log.** That
    includes an unfiltered `--dry-run` (the job spec carries an injected MinIO secret and a Nomad
@@ -394,19 +553,26 @@ directories are the honest evaluation. Do not average them with the first.
 3. **Never commit `site.env`**, a token file, or anything under `work/`.
 4. **Stage only your own files** — `git add <paths>`, never `git add -A`. Sibling sessions leave
    uncommitted work in these trees.
-5. **Climb §5 from rung 1 every time.** Do not submit a twelve-hour campaign to find out whether
+5. **Treat `~/.abc/config.yaml` as a secret file.** It holds every context's access token. Do
+   not print it, copy it into a message, or put it in a repository.
+6. **Install the CLI from a release or `abc self-update`.** Never cross-compile a binary into
+   `/tmp` and copy it around — a forked toolchain makes it impossible to say which CLI submitted
+   a given run.
+7. **Run §4 before §6, and after any credential or version change.** Every symptom in §9 is
+   cheaper to diagnose against `hello-cluster` than inside a twelve-hour campaign.
+8. **Climb §7 from rung 1 every time.** Do not submit a twelve-hour campaign to find out whether
    a parameter name is spelled correctly. A stub run costs seconds and would have caught it.
-6. **Do not relaunch to fix a typo.** Every launch is a fresh run with no cache; get the
+9. **Do not relaunch to fix a typo.** Every launch is a fresh run with no cache; get the
    configuration right before resubmitting. Minimising rerun cost is a configuration discipline
    here, not a scheduler feature.
-7. **Stop the workbench when you are not using it.** It holds cores on the same node the
+10. **Stop the workbench when you are not using it.** It holds cores on the same node the
    pipeline needs.
-8. **Do not edit `main.nf`, `nextflow.config` or anything in `modules/`** to ask a scientific
+11. **Do not edit `main.nf`, `nextflow.config` or anything in `modules/`** to ask a scientific
    question. If a question requires it, that is a pipeline gap — say so. Everything you need is
    a params file, a step file, or a flag.
-9. **Report a failure with its evidence.** Set `nomad_delete_on_completion=false`, keep the
+12. **Report a failure with its evidence.** Set `nomad_delete_on_completion=false`, keep the
    allocation, and quote what it actually said. A paraphrased Nomad error is almost always
-   mis-diagnosed — four of the symptoms in §7 arrive wearing another failure's clothes.
+   mis-diagnosed — four of the symptoms in §9 arrive wearing another failure's clothes.
 
 ### Entry point for a fresh session
 
@@ -417,8 +583,12 @@ Put this in a `CLAUDE.md` beside your checkout so it is read automatically:
 
 This repo is the mtb-resistotyper-ml feature-engineering and training pipeline.
 
-- Operating instructions: `docs/cluster-submission.md`. Read §9 (hard rules) before
-  running anything, and §5 before submitting to the cluster.
+- Operating instructions: `docs/cluster-submission.md`. Read §11 (hard rules) before
+  running anything, §§1-4 to set up and verify the CLI, and §7 before submitting to the
+  cluster.
+- Before any cluster work in a fresh environment, run §4: `abc doctor --context <ctx>`,
+  a storage round-trip, `abc job run hello-cluster`, then `abc pipeline run
+  nextflow-io/hello`. Do not submit the real pipeline with any of those failing.
 - What the pipeline computes, and how to change the features or the learner:
   `docs/collaborator-guide.md`.
 - Cluster context is `ABC_CLI_CONTEXT=<my-context>`, passed per command. Never run
