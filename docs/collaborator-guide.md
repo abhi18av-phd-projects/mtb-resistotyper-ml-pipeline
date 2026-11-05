@@ -373,6 +373,9 @@ Start at `tiers/`. It is the per-drug summary the rest of the tree supports.
 
 ## 9. Running on the cluster
 
+Credentials, one-time setup, the workbench, the cheap-to-expensive iteration ladder and the
+hard rules are in [`cluster-submission.md`](cluster-submission.md). The short version:
+
 ```bash
 scripts/launch.sh experiments/<name>.yml
 ```

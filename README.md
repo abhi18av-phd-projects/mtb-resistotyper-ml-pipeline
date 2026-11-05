@@ -17,7 +17,9 @@ nextflow run . --build_catalogue true --db /path/to/cryptic.duckdb
 **New here, and your remit is the features or the models?** Start at
 [`docs/collaborator-guide.md`](docs/collaborator-guide.md) — what to ask for access to, the
 fastest run that proves the setup, how to change FE and training without touching the
-workflow, and the technique backlog.
+workflow, and the technique backlog. Submitting to the abc cluster — credentials, the
+workbench, the iteration ladder and what `--resume` does and does not do — is
+[`docs/cluster-submission.md`](docs/cluster-submission.md).
 
 ## Three ways in
 
